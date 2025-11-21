@@ -1,13 +1,14 @@
-src/
-node_modules/
-dist/
-*.md
-!dashboard/**
-.env
-.env.local
-tsconfig.json
-package.json
-package-lock.json
-TEST_SCENARIOS.md
-gameplan.md
+# Only ignore root-level backend files
+/src/
+/dist/
+/.env
+/tsconfig.json
+/package.json
+/package-lock.json
+
+# Ignore markdown docs (but not dashboard README)
+/*.md
+/TEST_SCENARIOS.md
+/DEPLOYMENT.md
+/gameplan.md
 
