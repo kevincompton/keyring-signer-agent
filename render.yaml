@@ -1,0 +1,65 @@
+services:
+  # KeyRing Signer Agent Backend & API
+  - type: web
+    name: keyring-signer-agent-api
+    runtime: node
+    env: node
+    region: oregon
+    plan: free
+    buildCommand: npm install
+    startCommand: npm run api
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: API_PORT
+        value: 3001
+      - key: HEDERA_NETWORK
+        sync: false
+      - key: HEDERA_ACCOUNT_ID
+        sync: false
+      - key: HEDERA_PRIVATE_KEY
+        sync: false
+      - key: OPERATOR_PUBLIC_KEY
+        sync: false
+      - key: PROJECT_REGISTRY_TOPIC
+        sync: false
+      - key: THRESHOLD_ACCOUNT_ID
+        sync: false
+      - key: LYNX_TESTNET_OPERATOR_ID
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+
+  # KeyRing Signer Agent (Background Worker)
+  - type: worker
+    name: keyring-signer-agent
+    runtime: node
+    env: node
+    region: oregon
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: HEDERA_NETWORK
+        sync: false
+      - key: HEDERA_ACCOUNT_ID
+        sync: false
+      - key: HEDERA_PRIVATE_KEY
+        sync: false
+      - key: OPERATOR_PUBLIC_KEY
+        sync: false
+      - key: PROJECT_REGISTRY_TOPIC
+        sync: false
+      - key: THRESHOLD_ACCOUNT_ID
+        sync: false
+      - key: LYNX_TESTNET_OPERATOR_ID
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: TEST_SIGNER1
+        sync: false
+      - key: TEST_SIGNER2
+        sync: false
+

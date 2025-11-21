@@ -1,0 +1,13 @@
+src/
+node_modules/
+dist/
+*.md
+!dashboard/**
+.env
+.env.local
+tsconfig.json
+package.json
+package-lock.json
+TEST_SCENARIOS.md
+gameplan.md
+
