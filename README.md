@@ -2,6 +2,12 @@
 
 Autonomous agent signers for the KeyRing protocol on Hedera network.
 
+## 🔗 Live Demo
+
+**Dashboard:** [https://keyring-signer-agent.vercel.app/](https://keyring-signer-agent.vercel.app/)
+
+View real-time transaction monitoring, validator activity, and threshold account status.
+
 ## Overview
 
 The KeyRing Signer Agent is an autonomous agent that monitors Hedera HCS topics for scheduled transactions requiring multi-signature approval. The agent automatically signs approved transactions based on project verification and validation rules.
