@@ -10,18 +10,18 @@ import { KeyringSignerAgent } from './agent/keyring-signer-agent.js';
 config();
 
 /**
- * Lynx Balancer Agent - Main Entry Point
+ * KeyRing Signer Agent - Main Entry Point
  * 
- * This is the main entry point for the Lynx Balancer Agent.
- * The agent listens for governance updates via HCS-10 and executes
- * portfolio rebalancing operations on Hedera.
+ * This is the main entry point for the KeyRing Signer Agent.
+ * The agent monitors HCS topics for scheduled transactions and
+ * autonomously signs approved transactions for multi-sig accounts.
  */
 async function main(): Promise<void> {
   console.log("🦌⚡ Keyring Signer Agent");
   console.log("========================");
 
   try {
-    // Create and initialize the balancer agent
+    // Create and initialize the signer agent
     const agent = new KeyringSignerAgent();
     
     // Initialize the agent
@@ -31,7 +31,7 @@ async function main(): Promise<void> {
     await agent.start();
 
   } catch (error) {
-    console.error("❌ Failed to start Lynx Balancer Agent:", error instanceof Error ? error.message : String(error));
+    console.error("❌ Failed to start Keyring Signer Agent:", error instanceof Error ? error.message : String(error));
     process.exit(1);
   }
 }

@@ -90,10 +90,7 @@ export class KeyringSignerAgent {
             const llm = new ChatOpenAI({
                 modelName: "gpt-4o",                // Using GPT-4o for better reasoning
                 temperature: 0,                     // 0 = deterministic, 1 = creative
-                configuration: {
-                    baseURL: "https://ai-gateway.vercel.sh/v1",  // Vercel AI Gateway
-                },
-                apiKey: process.env.AI_GATEWAY_API_KEY!,         // Your Vercel AI Gateway key
+                openAIApiKey: process.env.OPENAI_API_KEY!,
             });
 
             const prompt = ChatPromptTemplate.fromMessages([
