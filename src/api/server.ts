@@ -86,14 +86,14 @@ app.get('/api/project', async (req: Request, res: Response) => {
       description: parsed.metadata?.description
     };
 
-    res.json({
+    return res.json({
       success: true,
       data: projectInfo
     } as ApiResponse<ProjectInfo>);
 
   } catch (error) {
     console.error('Error fetching project info:', error);
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       error: error instanceof Error ? error.message : 'Unknown error'
     } as ApiResponse<ProjectInfo>);
@@ -133,14 +133,14 @@ app.get('/api/threshold', async (req: Request, res: Response) => {
       memo: accountInfo.accountMemo
     };
 
-    res.json({
+    return res.json({
       success: true,
       data: thresholdInfo
     } as ApiResponse<ThresholdInfo>);
 
   } catch (error) {
     console.error('Error fetching threshold info:', error);
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       error: error instanceof Error ? error.message : 'Unknown error'
     } as ApiResponse<ThresholdInfo>);
@@ -206,14 +206,14 @@ app.get('/api/transactions', async (req: Request, res: Response) => {
       };
     });
 
-    res.json({
+    return res.json({
       success: true,
       data: transactions
     } as ApiResponse<ScheduledTransaction[]>);
 
   } catch (error) {
     console.error('Error fetching transactions:', error);
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       error: error instanceof Error ? error.message : 'Unknown error'
     } as ApiResponse<ScheduledTransaction[]>);
@@ -248,14 +248,14 @@ app.get('/api/stats', async (req: Request, res: Response) => {
       rejectedTransactions: schedules.filter((s: any) => s.deleted).length
     };
 
-    res.json({
+    return res.json({
       success: true,
       data: stats
     } as ApiResponse<DashboardStats>);
 
   } catch (error) {
     console.error('Error fetching stats:', error);
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       error: error instanceof Error ? error.message : 'Unknown error'
     } as ApiResponse<DashboardStats>);
