@@ -88,9 +88,14 @@ export class KeyringSignerAgent {
             });
 
             const llm = new ChatOpenAI({
-                modelName: "gpt-4o",                // Using GPT-4o for better reasoning
-                temperature: 0,                     // 0 = deterministic, 1 = creative
-                openAIApiKey: process.env.OPENAI_API_KEY!,
+                modelName: "gpt-4o",
+                temperature: 0,
+                configuration: {
+                    baseURL: "https://ai-gateway.vercel.sh/v1",
+                },
+                apiKey: process.env.AI_GATEWAY_API_KEY!,
+                maxRetries: 5,                      // Retry with exponential backoff
+                timeout: 90000,                     // 90 second timeout for complex operations
             });
 
             const prompt = ChatPromptTemplate.fromMessages([
@@ -254,6 +259,9 @@ You are account ${this.env.HEDERA_ACCOUNT_ID} operating on ${this.env.HEDERA_NET
             } else {
                 throw new Error('Could not extract operator ID from registry');
             }
+            
+            // Small delay after AI operation
+            await new Promise(resolve => setTimeout(resolve, 1000));
         } catch (error) {
             console.error("❌ Error loading project details:", error);
             throw error;
@@ -269,6 +277,9 @@ You are account ${this.env.HEDERA_ACCOUNT_ID} operating on ${this.env.HEDERA_NET
                 input: `Review these Hedera smart contracts:\n\nLynxToken:\n${lynxToken}\n\nDepositMinterV2:\n${depositMinter} and save them in memory to compare to transactions later. Respond wih contract and ABI loaded boolean.`
             });
             console.log("✅ Contract review:", result?.output);
+            
+            // Small delay after AI operation
+            await new Promise(resolve => setTimeout(resolve, 1000));
         } catch (error) {
             console.error("❌ Error loading contract details:", error);
             throw error;
@@ -291,6 +302,9 @@ You are account ${this.env.HEDERA_ACCOUNT_ID} operating on ${this.env.HEDERA_NET
             });
             
             console.log("✅ Pending transactions fetched:", result?.output);
+            
+            // Small delay after AI operation
+            await new Promise(resolve => setTimeout(resolve, 1000));
             
             // Parse the schedule IDs from the agent's response
             const output = result?.output || '';
@@ -337,8 +351,29 @@ You are account ${this.env.HEDERA_ACCOUNT_ID} operating on ${this.env.HEDERA_NET
 
             console.log(`🔍 Reviewing ${this.pendingScheduleIds.length} pending transaction(s)...`);
             
-            for (const scheduleId of this.pendingScheduleIds) {
-                await this.reviewPendingTransaction(scheduleId);
+            for (let i = 0; i < this.pendingScheduleIds.length; i++) {
+                const scheduleId = this.pendingScheduleIds[i];
+                
+                try {
+                    await this.reviewPendingTransaction(scheduleId);
+                    
+                    // Add delay between transactions to avoid rate limits
+                    if (i < this.pendingScheduleIds.length - 1) {
+                        console.log("⏱️  Waiting 3 seconds before next transaction review (rate limit prevention)...");
+                        await new Promise(resolve => setTimeout(resolve, 3000));
+                    }
+                } catch (error) {
+                    console.error(`❌ Error reviewing transaction ${scheduleId}:`, error);
+                    
+                    // If rate limited, wait longer before continuing
+                    if (error instanceof Error && error.message.includes('429')) {
+                        console.log("⚠️  Rate limit detected. Waiting 60 seconds before continuing...");
+                        await new Promise(resolve => setTimeout(resolve, 60000));
+                    }
+                    
+                    // Continue with other transactions even if one fails
+                    continue;
+                }
             }
             
             console.log("✅ All pending transactions reviewed");
