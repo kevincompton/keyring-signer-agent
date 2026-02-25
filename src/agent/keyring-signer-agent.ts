@@ -2,9 +2,9 @@ import { config } from 'dotenv';
 import { Client } from '@hashgraph/sdk';
 import { EnvironmentConfig } from './agent-config.js';
 import { HederaLangchainToolkit, AgentMode, coreAccountPlugin, coreConsensusPlugin, coreConsensusQueryPlugin } from 'hedera-agent-kit';
-import { AgentExecutor, createToolCallingAgent } from 'langchain/agents';
+import { createAgent } from 'langchain';
 import { ChatOpenAI } from '@langchain/openai';
-import { ChatPromptTemplate } from '@langchain/core/prompts';
+import { AIMessage } from '@langchain/core/messages';
 import { readFileSync } from 'fs';
 import { join } from 'path';
 import { FetchPendingTransactionsTool } from '../tools/fetch-pending-transactions.js';
@@ -15,13 +15,31 @@ import { GetScheduleInfoTool } from '../tools/get-schedule-info.js';
 // Load environment variables
 config();
 
+/** Extract final text output from LangChain 1.x agent invoke result */
+function getAgentOutput(result: { messages?: unknown[] }): string {
+    const messages = result?.messages ?? [];
+    for (let i = messages.length - 1; i >= 0; i--) {
+        const msg = messages[i];
+        if (msg instanceof AIMessage) {
+            const c = msg.content;
+            if (typeof c === 'string') return c;
+            if (Array.isArray(c)) {
+                return c.map((b: { type?: string; text?: string }) => b?.text ?? '').join('');
+            }
+        }
+        const m = msg as { _getType?: () => string; content?: string | unknown[] };
+        if (m && m._getType?.() === 'ai' && typeof m.content === 'string') return m.content;
+    }
+    return '';
+}
+
 export class KeyringSignerAgent {
     private env!: EnvironmentConfig;
     private isRunning: boolean = false;
 
     // Blockchain tools
     private hederaAgentToolkit?: HederaLangchainToolkit;
-    private agentExecutor?: AgentExecutor;
+    private agent?: ReturnType<typeof createAgent>;
     private client?: Client;
 
     // State for pending transactions
@@ -88,18 +106,17 @@ export class KeyringSignerAgent {
             });
 
             const llm = new ChatOpenAI({
-                modelName: "gpt-4o",
+                model: "gpt-5-nano",
                 temperature: 0,
                 configuration: {
                     baseURL: "https://ai-gateway.vercel.sh/v1",
                 },
                 apiKey: process.env.AI_GATEWAY_API_KEY!,
-                maxRetries: 5,                      // Retry with exponential backoff
-                timeout: 90000,                     // 90 second timeout for complex operations
+                maxRetries: 5,
+                timeout: 90000,
             });
 
-            const prompt = ChatPromptTemplate.fromMessages([
-                ["system", `You are an autonomous Keyring Signer Agent for the Hedera blockchain. Your role is to act as a threshold signature key holder for project accounts.
+            const systemPrompt = `You are an autonomous Keyring Signer Agent for the Hedera blockchain. Your role is to act as a threshold signature key holder for project accounts.
 
 RESPONSIBILITIES:
 1. Load and understand project configurations from HCS (Hedera Consensus Service) registry topics
@@ -167,31 +184,19 @@ TOOLS AT YOUR DISPOSAL:
 - sign_transaction: Sign approved transactions
 - SUBMIT_TOPIC_MESSAGE_TOOL: Post validation/rejection messages to HCS topics
 
-You are account ${this.env.HEDERA_ACCOUNT_ID} operating on ${this.env.HEDERA_NETWORK || 'testnet'}.`],
-                ["user", "{input}"],
-                ["placeholder", "{agent_scratchpad}"],
-            ]);
+You are account ${this.env.HEDERA_ACCOUNT_ID} operating on ${this.env.HEDERA_NETWORK || 'testnet'}.`;
 
             const hederaTools = this.hederaAgentToolkit.getTools();
-            
-            // Add custom tools
             const fetchPendingTransactionsTool = new FetchPendingTransactionsTool(this.client);
             const signTransactionTool = new SignTransactionTool(this.client);
             const queryRegistryTool = new QueryRegistryTopicTool(this.env.HEDERA_NETWORK || 'testnet');
             const getScheduleInfoTool = new GetScheduleInfoTool(this.client);
-            
             const allTools = [...hederaTools, fetchPendingTransactionsTool, signTransactionTool, queryRegistryTool, getScheduleInfoTool];
-            const agent = await createToolCallingAgent({
-                llm,
-                tools: allTools,
-                prompt
-            });
 
-            this.agentExecutor = new AgentExecutor({
-                agent,
-                tools: allTools,
-                verbose: false,
-                maxIterations: 10
+            this.agent = createAgent({
+                model: llm,
+                tools: allTools as any, // Hedera toolkit tools are compatible at runtime
+                systemPrompt,
             });
 
             console.log("✅ Blockchain tools initialized");
@@ -241,18 +246,18 @@ You are account ${this.env.HEDERA_ACCOUNT_ID} operating on ${this.env.HEDERA_NET
             console.log("📋 Loading project details from registry topic...");
             console.log(`   Topic ID: ${this.env.PROJECT_REGISTRY_TOPIC}`);
             
-            const result = await this.agentExecutor?.invoke({
-                input: `Use the query_registry_topic tool to query topic ${this.env.PROJECT_REGISTRY_TOPIC}.
-                
-                Extract the "operatorAccountId" field from the metadata in the returned message.
-                
-                Return ONLY the operator account ID in format 0.0.xxxxx`
-            });
-            
-            console.log("✅ Project details loaded:", result?.output);
-            
-            // Extract operator ID from response
-            const operatorMatch = result?.output?.match(/0\.0\.\d+/);
+            const result = await this.agent?.invoke({
+                messages: [{ role: "human", content: `Use the query_registry_topic tool to query topic ${this.env.PROJECT_REGISTRY_TOPIC}.
+
+Extract the "operatorAccountId" field from the metadata in the returned message.
+
+Return ONLY the operator account ID in format 0.0.xxxxx` }],
+            }, { configurable: { thread_id: "keyring-signer" } });
+
+            const output = getAgentOutput(result ?? {});
+            console.log("✅ Project details loaded:", output);
+
+            const operatorMatch = output?.match(/0\.0\.\d+/);
             if (operatorMatch) {
                 this.lynxOperatorId = operatorMatch[0];
                 console.log(`📝 Lynx Operator ID: ${this.lynxOperatorId}`);
@@ -273,10 +278,10 @@ You are account ${this.env.HEDERA_ACCOUNT_ID} operating on ${this.env.HEDERA_NET
             const lynxToken = readFileSync(join(process.cwd(), 'src/projects/contracts/LynxToken.sol'), 'utf-8');
             const depositMinter = readFileSync(join(process.cwd(), 'src/projects/contracts/DepositMinterV2.sol'), 'utf-8');
             
-            const result = await this.agentExecutor?.invoke({
-                input: `Review these Hedera smart contracts:\n\nLynxToken:\n${lynxToken}\n\nDepositMinterV2:\n${depositMinter} and save them in memory to compare to transactions later. Respond wih contract and ABI loaded boolean.`
-            });
-            console.log("✅ Contract review:", result?.output);
+            const result = await this.agent?.invoke({
+                messages: [{ role: "human", content: `Review these Hedera smart contracts:\n\nLynxToken:\n${lynxToken}\n\nDepositMinterV2:\n${depositMinter} and save them in memory to compare to transactions later. Respond with contract and ABI loaded boolean.` }],
+            }, { configurable: { thread_id: "keyring-signer" } });
+            console.log("✅ Contract review:", getAgentOutput(result ?? {}));
             
             // Small delay after AI operation
             await new Promise(resolve => setTimeout(resolve, 1000));
@@ -295,19 +300,16 @@ You are account ${this.env.HEDERA_ACCOUNT_ID} operating on ${this.env.HEDERA_NET
                 throw new Error('Lynx operator ID not loaded');
             }
             
-            const result = await this.agentExecutor?.invoke({
-                input: `Use the fetch_pending_transactions tool with projectOperatorAccountId="${this.lynxOperatorId}".
-                
-                Return ONLY a JSON array of schedule IDs.`
-            });
-            
-            console.log("✅ Pending transactions fetched:", result?.output);
-            
-            // Small delay after AI operation
+            const result = await this.agent?.invoke({
+                messages: [{ role: "human", content: `Use the fetch_pending_transactions tool with projectOperatorAccountId="${this.lynxOperatorId}".
+
+Return ONLY a JSON array of schedule IDs.` }],
+            }, { configurable: { thread_id: "keyring-signer" } });
+
+            const output = getAgentOutput(result ?? {});
+            console.log("✅ Pending transactions fetched:", output);
+
             await new Promise(resolve => setTimeout(resolve, 1000));
-            
-            // Parse the schedule IDs from the agent's response
-            const output = result?.output || '';
             
             // Try to extract JSON array from the response
             const jsonMatch = output.match(/\[[\s\S]*?\]/);
@@ -387,42 +389,42 @@ You are account ${this.env.HEDERA_ACCOUNT_ID} operating on ${this.env.HEDERA_NET
         try {
             console.log(`🔍 Reviewing transaction: ${scheduleId}`);
             
-            const result = await this.agentExecutor?.invoke({
-                input: `Review scheduled transaction ${scheduleId}:
-                
-                STEP 1: Get full transaction details
-                - Use get_schedule_info tool to get details for scheduleId="${scheduleId}"
-                - This will return the decoded function name and all parameters
-                
-                STEP 2: Analyze the transaction
-                - Check the function name and parameters against the validation rules in your system prompt
-                - Compare parameters to the DepositMinterV2 contract constraints
-                - Identify any red flags (invalid ratios, zero addresses, insufficient deposits, etc.)
-                - Determine risk level: low, medium, high, or critical
-                
-                STEP 3: Post validation message
-                - Always post to topic ${this.env.PROJECT_VALIDATOR_TOPIC} with:
-                   {
-                     "scheduleId": "${scheduleId}",
-                     "reviewer": "${this.env.HEDERA_ACCOUNT_ID}",
-                     "functionName": "<actual function from get_schedule_info>",
-                     "reviewDescription": "<detailed analysis of why safe or dangerous>",
-                     "riskLevel": "<low|medium|high|critical>",
-                     "timestamp": "<ISO timestamp>",
-                     "projectRegistrationTxId": "${this.env.LYNX_REGISTRATION_TX}"
-                   }
-                
-                STEP 4: Take action based on risk
-                - If LOW or MEDIUM risk: Use sign_transaction tool with scheduleId="${scheduleId}"
-                - If HIGH or CRITICAL risk: 
-                  * Post detailed rejection to topic ${this.env.PROJECT_REJECTION_TOPIC} explaining the security issue
-                  * DO NOT sign the transaction
-                  * Report that transaction was rejected
-                
-                Report the final action taken (signed or rejected) and why.`
-            });
-            
-            console.log(`✅ Transaction ${scheduleId} review complete:`, result?.output);
+            const result = await this.agent?.invoke({
+                messages: [{ role: "human", content: `Review scheduled transaction ${scheduleId}:
+
+STEP 1: Get full transaction details
+- Use get_schedule_info tool to get details for scheduleId="${scheduleId}"
+- This will return the decoded function name and all parameters
+
+STEP 2: Analyze the transaction
+- Check the function name and parameters against the validation rules in your system prompt
+- Compare parameters to the DepositMinterV2 contract constraints
+- Identify any red flags (invalid ratios, zero addresses, insufficient deposits, etc.)
+- Determine risk level: low, medium, high, or critical
+
+STEP 3: Post validation message
+- Always post to topic ${this.env.PROJECT_VALIDATOR_TOPIC} with:
+   {
+     "scheduleId": "${scheduleId}",
+     "reviewer": "${this.env.HEDERA_ACCOUNT_ID}",
+     "functionName": "<actual function from get_schedule_info>",
+     "reviewDescription": "<detailed analysis of why safe or dangerous>",
+     "riskLevel": "<low|medium|high|critical>",
+     "timestamp": "<ISO timestamp>",
+     "projectRegistrationTxId": "${this.env.LYNX_REGISTRATION_TX}"
+   }
+
+STEP 4: Take action based on risk
+- If LOW or MEDIUM risk: Use sign_transaction tool with scheduleId="${scheduleId}"
+- If HIGH or CRITICAL risk:
+  * Post detailed rejection to topic ${this.env.PROJECT_REJECTION_TOPIC} explaining the security issue
+  * DO NOT sign the transaction
+  * Report that transaction was rejected
+
+Report the final action taken (signed or rejected) and why.` }],
+            }, { configurable: { thread_id: "keyring-signer" } });
+
+            console.log(`✅ Transaction ${scheduleId} review complete:`, getAgentOutput(result ?? {}));
         } catch (error) {
             console.error(`❌ Error reviewing transaction ${scheduleId}:`, error);
             throw error;

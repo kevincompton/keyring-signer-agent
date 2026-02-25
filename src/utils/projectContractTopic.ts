@@ -187,40 +187,32 @@ async function submitContractList(contractsData: ProjectContractsData, topicId?:
 async function sendTestContracts() {
     // Get audit topic from environment
     const auditTopicId = process.env.PROJECT_AUDIT_TOPIC;
-    
+
     if (!auditTopicId) {
         console.warn('⚠️  PROJECT_AUDIT_TOPIC not set - contracts will not reference an audit topic');
     }
-    
-    // Using actual Lynx project data from the registration
+
+    const contractsTopicId = '0.0.7289727';
+
     const testContractsData: ProjectContractsData = {
-        projectAccountId: "0.0.4337514", // Lynx project account ID (t_id from project registration)
+        projectAccountId: "0.0.4337514",
         projectName: "Lynxify",
-        projectRegistrationTxId: process.env.LYNX_REGISTRATION_TX || "0.0.xxxxx@timestamp.sequence",
+        projectRegistrationTxId: "0.0.4337514@1771959014.121126452",
         contracts: [
             {
-                contractAddress: "0.0.9766114",
-                contractName: "Lynx Contract 1",
+                contractAddress: "0.0.8027033",
+                contractName: "Lynx LP Manager",
                 contractType: "Smart Contract",
                 version: "1.0.0",
                 deployedDate: new Date().toISOString(),
-                description: "Lynx smart contract",
-                auditTopicId: auditTopicId // Reference to project's audit topic
-            },
-            {
-                contractAddress: "0.0.9778566",
-                contractName: "Lynx Contract 2",
-                contractType: "Smart Contract",
-                version: "1.0.0",
-                deployedDate: new Date().toISOString(),
-                description: "Lynx smart contract",
-                auditTopicId: auditTopicId // Reference to project's audit topic
+                description: "Lynx LP Manager - monitors actual testnet transactions",
+                auditTopicId: auditTopicId
             }
         ],
         lastUpdated: new Date().toISOString()
     };
 
-    await submitContractList(testContractsData);
+    await submitContractList(testContractsData, contractsTopicId);
 }
 
 // Run the example if executed directly
