@@ -12,17 +12,22 @@ export class GetScheduleInfoTool extends StructuredTool {
         scheduleId: z.string().describe('The schedule ID to query (format: 0.0.xxxxx)'),
     });
 
-    private depositMinterAbi: any;
+    private depositMinterAbi: any[];
+    private vaultLPManagerAbi: any[];
 
     constructor(private client: Client) {
         super();
-        // Load the DepositMinterV2 ABI for decoding
+        this.depositMinterAbi = this.loadAbi('DepositMinterV2.json');
+        this.vaultLPManagerAbi = this.loadAbi('VaultLPManager.json');
+    }
+
+    private loadAbi(filename: string): any[] {
         try {
-            const abiPath = join(process.cwd(), 'src/projects/abi/DepositMinterV2.json');
-            this.depositMinterAbi = JSON.parse(readFileSync(abiPath, 'utf-8')).abi;
+            const abiPath = join(process.cwd(), 'src/projects/abi', filename);
+            return JSON.parse(readFileSync(abiPath, 'utf-8')).abi;
         } catch (error) {
-            console.warn('[GET_SCHEDULE] Could not load DepositMinterV2 ABI, function decoding will be limited');
-            this.depositMinterAbi = [];
+            console.warn(`[GET_SCHEDULE] Could not load ${filename}, function decoding may be limited`);
+            return [];
         }
     }
 
@@ -137,10 +142,10 @@ export class GetScheduleInfoTool extends StructuredTool {
                 };
             }
 
-            // Decode the function call using the ABI
+            // Decode the function call using the ABI (tries DepositMinterV2, then VaultLPManager)
             const decodedFunction = this.decodeFunctionCall(contractInfo.functionParameters);
 
-            return {
+            const result: Record<string, unknown> = {
                 decoded: true,
                 contractId: contractInfo.contractId,
                 functionName: decodedFunction.functionName,
@@ -149,6 +154,10 @@ export class GetScheduleInfoTool extends StructuredTool {
                 gas: contractInfo.gas,
                 rawFunctionParams: contractInfo.functionParameters
             };
+            if ('contractHint' in decodedFunction && decodedFunction.contractHint) {
+                result.contractHint = decodedFunction.contractHint;
+            }
+            return result;
 
         } catch (error) {
             return { 
@@ -303,42 +312,38 @@ export class GetScheduleInfoTool extends StructuredTool {
         return `${shard}.${realm}.${num}`;
     }
 
-    private decodeFunctionCall(functionParamsHex: string): { functionName: string; parameters: any } {
+    private decodeFunctionCall(functionParamsHex: string): { functionName: string; parameters: any; contractHint?: string } {
         try {
-            // Remove '0x' prefix if present
             const cleanHex = functionParamsHex.startsWith('0x') ? functionParamsHex.slice(2) : functionParamsHex;
-            const functionData = Buffer.from(cleanHex, 'hex');
+            const data = '0x' + cleanHex;
 
-            if (this.depositMinterAbi.length === 0) {
-                return {
-                    functionName: 'Unknown (ABI not loaded)',
-                    parameters: { rawHex: functionParamsHex }
-                };
+            // Try DepositMinterV2 first, then VaultLPManager
+            const abis: { name: string; abi: any[] }[] = [
+                { name: 'DepositMinterV2', abi: this.depositMinterAbi },
+                { name: 'VaultLPManager', abi: this.vaultLPManagerAbi },
+            ];
+
+            for (const { name, abi } of abis) {
+                if (abi.length === 0) continue;
+                try {
+                    const iface = new ethers.Interface(abi);
+                    const decoded = iface.parseTransaction({ data });
+                    if (decoded) {
+                        const params: Record<string, unknown> = {};
+                        decoded.fragment.inputs.forEach((input, index) => {
+                            const value = decoded.args[index];
+                            params[input.name || `param${index}`] = typeof value === 'bigint' ? value.toString() : value;
+                        });
+                        return { functionName: decoded.name, parameters: params, contractHint: name };
+                    }
+                } catch {
+                    continue;
+                }
             }
-
-            const iface = new ethers.Interface(this.depositMinterAbi);
-            
-            // Try to decode the function call
-            const decoded = iface.parseTransaction({ data: '0x' + cleanHex });
-            
-            if (!decoded) {
-                return {
-                    functionName: 'Unknown',
-                    parameters: { rawHex: functionParamsHex }
-                };
-            }
-
-            // Convert decoded args to a readable format
-            const params: any = {};
-            decoded.fragment.inputs.forEach((input, index) => {
-                const value = decoded.args[index];
-                // Convert BigInt to string for JSON serialization
-                params[input.name || `param${index}`] = typeof value === 'bigint' ? value.toString() : value;
-            });
 
             return {
-                functionName: decoded.name,
-                parameters: params
+                functionName: 'Unknown',
+                parameters: { rawHex: functionParamsHex }
             };
 
         } catch (error) {

@@ -14,7 +14,34 @@ interface IHederaTokenService {
     function isAssociated(address account, address token) external returns (int64 responseCode, bool associated);
     function isToken(address token) external returns (int64 responseCode, bool isToken);
     function transferFrom(address token, address from, address to, int64 amount) external returns (int64 responseCode);
+    function approveNFT(address token, address approved, int64 serialNumber) external returns (int64 responseCode);
+    function approve(address token, address spender, uint256 amount) external returns (int64 responseCode);
 }
+
+// IERC20 interface for token approvals
+interface IERC20 {
+    function approve(address spender, uint256 amount) external returns (bool);
+    function balanceOf(address account) external view returns (uint256);
+    function allowance(address owner, address spender) external view returns (uint256);
+}
+
+interface IWHBAR {
+    function balanceOf(address account) external view returns (uint256);
+}
+
+/// @notice SaucerSwap V2 SwapRouter exactInput (tokens for tokens)
+interface ISaucerSwapV2Router {
+    struct ExactInputParams {
+        bytes path;
+        address recipient;
+        uint256 deadline;
+        uint256 amountIn;
+        uint256 amountOutMinimum;
+    }
+    function exactInput(ExactInputParams calldata params) external payable returns (uint256 amountOut);
+}
+
+import "./ILPModule.sol";
 
 /**
  * @title DepositMinterV2
@@ -33,6 +60,7 @@ contract DepositMinterV2 is Initializable, UUPSUpgradeable {
     address public USDC_TOKEN;
     address public WETH_TOKEN;
     address public XSAUCE_TOKEN;
+    // NOTE: SAUCE_TOKEN moved to end of storage to preserve upgrade compatibility
     
     // Access control
     address public ADMIN;
@@ -50,7 +78,31 @@ contract DepositMinterV2 is Initializable, UUPSUpgradeable {
     uint256 public USDC_RATIO = 30;       
     uint256 public WETH_RATIO = 1; 
     uint256 public XSAUCE_RATIO = 9; 
+    
+    // stETH.h token address (Lido Staked ETH on Hedera)
+    // NOTE: Added at end of storage to preserve slot positions for upgrades
+    address public STETH_TOKEN;
+    
+    // ========== LP Module (VaultLPManager owns LP logic; WHBAR_TOKEN for createLPPosition) ==========
+    address public WHBAR_TOKEN;
+    bytes32 private __lpSlot1;
+    bytes32 private __lpSlot2;
+    bytes32 private __lpSlot3;
+    bytes32 private __lpSlot4;
+    bytes32 private __lpSlot5;
+    bytes32 private __lpSlot6;
+    
+    // SAUCE_TOKEN - added at end of storage to preserve slot positions for upgrades
+    address public SAUCE_TOKEN;
+    
+    // Burn reward vault: only this address can call transferHbarTo (pays burn rewards from vault HBAR)
+    address public rewardVault;
 
+    // LP contract: only this address receives LP delegations (vault transfers tokens here, then calls LP contract)
+    address public LP_MODULE;
+
+    // WHBAR_HELPER required for unwrap (SaucerSwap WHBAR uses withdraw(src,dst,wad); add at end for upgrade safety)
+    address public WHBAR_HELPER;
     
     // Ratio bounds for safety
     uint256 public constant MIN_RATIO = 1;
@@ -94,6 +146,8 @@ contract DepositMinterV2 is Initializable, UUPSUpgradeable {
     
     // Governance events
     event GovernanceAddressUpdated(address indexed oldGovernance, address indexed newGovernance);
+    event TreasuryUpdated(address indexed oldTreasury, address indexed newTreasury);
+    event AdminSet(address indexed oldAdmin, address indexed newAdmin);
     event RatiosUpdated(
         uint256 hbarRatio,
         uint256 wbtcRatio,
@@ -103,20 +157,71 @@ contract DepositMinterV2 is Initializable, UUPSUpgradeable {
         address indexed updatedBy
     );
     // Admin withdrawal event
-    event AdminTokenWithdrawal(address indexed token, address indexed to, uint256 amount, string reason);
     
     // Supply adjustment event
     event SupplyAdjusted(uint256 oldSupply, uint256 newSupply, uint256 newSupplyHuman);
+    
+    // LP Position management events
+    event LPPositionCreated(
+        uint256 indexed tokenSN,
+        address token0,
+        address token1,
+        uint24 fee,
+        int24 tickLower,
+        int24 tickUpper,
+        uint128 liquidity,
+        uint256 amount0,
+        uint256 amount1
+    );
+    event LPPositionDecreased(
+        uint256 indexed tokenSN,
+        uint128 liquidityRemoved,
+        uint256 amount0,
+        uint256 amount1
+    );
+    event LPFeesCollected(
+        uint256 indexed tokenSN,
+        uint256 amount0,
+        uint256 amount1
+    );
+    event LPPositionClosed(uint256 indexed tokenSN);
+    event WhbarTransferredToLp(address indexed lpModule, uint256 amount);
+    event TokenWithdrawnFromLp(address indexed token, uint256 amount);
+    event SwapWhbarToUsdc(uint256 amountIn, uint256 amountOut);
+    event TokenApprovalGranted(address indexed token, address indexed spender, uint256 amount);
+    
+    event RewardVaultUpdated(address indexed oldVault, address indexed newVault);
+    
+    // SaucerSwap V1 events
+    event SaucerSwapV1ConfigUpdated(address router);
+    event V1LiquidityAdded(address indexed tokenA, address indexed tokenB, uint256 amountA, uint256 amountB, uint256 liquidity);
+    event V1LiquidityRemoved(address indexed tokenA, address indexed tokenB, uint256 amountA, uint256 amountB, uint256 liquidity);
     
     // Errors
     error OnlyAdmin();
     error OnlyGovernance();
     error InvalidAmount();
-    error InvalidRatio(string ratioName, uint256 value);
-    error TokenNotSet(string tokenType);
+    error InvalidRatio(uint256 value);
+    error TokenNotSet();
     error InsufficientDeposit(string tokenType, uint256 required, uint256 provided);
     error HTSOperationFailed(string operation, int64 responseCode);
     error GovernanceNotSet();
+    error SaucerSwapNotConfigured();
+    error TokenNotInComposition(address token);
+    error ApprovalFailed(address token);
+    error TransferFailed(address token);
+    error StethNotSet();
+    error HTSAborted();
+    error ZeroSupply();
+    error WhbarHelperNotSet();
+    error TokenAddressZero();
+    error InsufficientHbar();
+    error InsufficientMintFee();
+    error OnlyRewardVault();
+    error InsufficientVaultHbar();
+    error RouterNotSet();
+    error LPModuleNotSet();
+    error InvalidAdmin();
     
     modifier onlyAdmin() {
         if (msg.sender != ADMIN) {
@@ -146,6 +251,7 @@ contract DepositMinterV2 is Initializable, UUPSUpgradeable {
         address usdcToken,
         address wethToken,
         address xsauceToken,
+        address stethToken,
         address treasury,
         uint256 initialSupply
     ) public initializer {
@@ -155,6 +261,8 @@ contract DepositMinterV2 is Initializable, UUPSUpgradeable {
         USDC_TOKEN = usdcToken;
         WETH_TOKEN = wethToken;
         XSAUCE_TOKEN = xsauceToken;
+        STETH_TOKEN = stethToken;
+        SAUCE_TOKEN = address(0x0000000000000000000000000000000000120f46); // Testnet SAUCE for LP testing
         ADMIN = admin; // Explicitly set admin address
         TREASURY = treasury; // Treasury address where minted tokens go
         lynxTotalSupply = initialSupply * (10 ** LYNX_DECIMALS); // Initialize supply in base units
@@ -178,6 +286,35 @@ contract DepositMinterV2 is Initializable, UUPSUpgradeable {
     }
     
     /**
+     * @dev Set stETH token address (admin only, for post-upgrade configuration)
+     */
+    function setStethToken(address stethToken) external onlyAdmin {
+        if (stethToken == address(0)) revert StethNotSet();
+        STETH_TOKEN = stethToken;
+    }
+
+    /**
+     * @dev Set treasury address (admin only). Must match LYNX token's treasury_account_id.
+     * Use to fix misconfigured treasury (e.g. wrong network's operator EVM at deploy).
+     */
+    function setTreasury(address treasury) external onlyAdmin {
+        if (treasury == address(0)) revert TokenNotSet();
+        address oldTreasury = TREASURY;
+        TREASURY = treasury;
+        emit TreasuryUpdated(oldTreasury, treasury);
+    }
+
+    /**
+     * @dev Set admin address (admin only). Use to transfer admin to KeyRing threshold for scheduled transactions.
+     */
+    function setAdmin(address newAdmin) external onlyAdmin {
+        if (newAdmin == address(0)) revert InvalidAdmin();
+        address oldAdmin = ADMIN;
+        ADMIN = newAdmin;
+        emit AdminSet(oldAdmin, newAdmin);
+    }
+    
+    /**
      * @dev Update all ratios (governance only)
      */
     function updateRatios(
@@ -189,11 +326,11 @@ contract DepositMinterV2 is Initializable, UUPSUpgradeable {
     ) external onlyGovernance {
         if (GOVERNANCE == address(0)) revert GovernanceNotSet();
         
-        _validateRatio("HBAR", hbarRatio);
-        _validateRatio("WBTC", wbtcRatio);
-        _validateRatio("USDC", usdcRatio);
-        _validateRatio("WETH", wethRatio);
-        _validateRatio("XSAUCE", xsauceRatio);
+        _validateRatio(hbarRatio);
+        _validateRatio(wbtcRatio);
+        _validateRatio(usdcRatio);
+        _validateRatio(wethRatio);
+        _validateRatio(xsauceRatio);
         
         HBAR_RATIO = hbarRatio;
         WBTC_RATIO = wbtcRatio;
@@ -214,11 +351,11 @@ contract DepositMinterV2 is Initializable, UUPSUpgradeable {
         uint256 wethRatio,
         uint256 xsauceRatio
     ) external onlyAdmin {
-        _validateRatio("HBAR", hbarRatio);
-        _validateRatio("WBTC", wbtcRatio);
-        _validateRatio("USDC", usdcRatio);
-        _validateRatio("WETH", wethRatio);
-        _validateRatio("XSAUCE", xsauceRatio);
+        _validateRatio(hbarRatio);
+        _validateRatio(wbtcRatio);
+        _validateRatio(usdcRatio);
+        _validateRatio(wethRatio);
+        _validateRatio(xsauceRatio);
         
         HBAR_RATIO = hbarRatio;
         WBTC_RATIO = wbtcRatio;
@@ -245,14 +382,15 @@ contract DepositMinterV2 is Initializable, UUPSUpgradeable {
     /**
      * @dev Internal function to validate ratio bounds
      */
-    function _validateRatio(string memory ratioName, uint256 value) internal pure {
+    function _validateRatio(uint256 value) internal pure {
         if (value < MIN_RATIO || value > MAX_RATIO) {
-            revert InvalidRatio(ratioName, value);
+            revert InvalidRatio(value);
         }
     }
     
     /**
      * @dev Associate contract with all tokens - proper HTS pattern
+     * TODO: Add onlyAdmin modifier for security
      */
     function associateTokens() external {
         // Associate with LYNX token
@@ -274,6 +412,15 @@ contract DepositMinterV2 is Initializable, UUPSUpgradeable {
         // Associate with XSAUCE token
         int64 xsauceResponse = hts.associateToken(address(this), XSAUCE_TOKEN);
         emit TokensAssociated(XSAUCE_TOKEN, xsauceResponse);
+        
+        // Associate with stETH.h token (Lido Staked ETH on Hedera)
+        int64 stethResponse = hts.associateToken(address(this), STETH_TOKEN);
+        emit TokensAssociated(STETH_TOKEN, stethResponse);
+        
+        // Associate with SAUCE token (for LP testing on testnet)
+        // Associate SAUCE token (state variable set in initialize)
+        int64 sauceResponse = hts.associateToken(address(this), SAUCE_TOKEN);
+        emit TokensAssociated(SAUCE_TOKEN, sauceResponse);
     }
     
     /**
@@ -352,22 +499,8 @@ contract DepositMinterV2 is Initializable, UUPSUpgradeable {
             uint256 xsauceWithdrawal
         ) 
     {
-        // Calculate base HBAR withdrawal using ratio
-        uint256 baseHbarWithdrawal = lynxAmount * HBAR_RATIO * (10 ** 8) / 10; // HBAR per LYNX
-        
-        // Calculate staking rewards adjustment: (balance / supply) - baseHbarRequired
-        uint256 stakingRewardAdjustment = 0;
-        if (lynxTotalSupply > 0) {
-            uint256 totalHbarPerLynx = (address(this).balance * lynxAmount) / lynxTotalSupply;
-            if (totalHbarPerLynx > baseHbarWithdrawal) {
-                stakingRewardAdjustment = totalHbarPerLynx - baseHbarWithdrawal;
-            }
-        }
-        
-        // Final HBAR withdrawal = base withdrawal + staking rewards
-        hbarWithdrawal = baseHbarWithdrawal + stakingRewardAdjustment;
-        
-        // Other tokens use standard ratios (no staking rewards)
+        // Base ratios only - rewards are claimed separately via operator
+        hbarWithdrawal = lynxAmount * HBAR_RATIO * (10 ** 8) / 10; // HBAR per LYNX
         wbtcWithdrawal = lynxAmount * WBTC_RATIO * (10 ** WBTC_DECIMALS) / 1000000; // WBTC per LYNX
         usdcWithdrawal = lynxAmount * USDC_RATIO * (10 ** USDC_DECIMALS) / 100; // USDC per LYNX
         wethWithdrawal = lynxAmount * WETH_RATIO * (10 ** WETH_DECIMALS) / 100000; // WETH per LYNX
@@ -410,18 +543,31 @@ contract DepositMinterV2 is Initializable, UUPSUpgradeable {
     function burnLynxTokens(uint256 lynxAmount) external {
         _burnLynxTokens(lynxAmount);
     }
+
+    /**
+     * @dev Atomic burn: take LYNX from user, withdraw underlying to user, burn from treasury.
+     * All in one transaction - user must approve this contract first.
+     * Use this instead of the 3-step flow (transferLynxForBurn → withdrawUnderlyingTokens → burnLynxTokens)
+     * to ensure transfer and burn happen in the same signing context (may fix HTS 326 on testnet).
+     */
+    function burn(uint256 lynxAmount) external {
+        _validateBurnInputs(lynxAmount);
+        _transferLynxToContract(lynxAmount);   // 1. Take LYNX from user → treasury
+        _processWithdrawals(lynxAmount);       // 2. Withdraw underlying to user
+        _burnLynxTokens(lynxAmount);           // 3. Burn from treasury
+    }
     
     /**
      * @dev Internal function to validate burn inputs
      */
     function _validateBurnInputs(uint256 lynxAmount) internal view {
         if (lynxAmount == 0) revert InvalidAmount();
-        if (LYNX_TOKEN == address(0)) revert TokenNotSet("LYNX");
+        if (LYNX_TOKEN == address(0)) revert TokenNotSet();
         
         // Note: User must have sufficient LYNX balance and allowance
         // The actual balance check will happen during the burn operation
     }
-    
+
     /**
      * @dev Internal function to validate mint inputs
      */
@@ -433,11 +579,11 @@ contract DepositMinterV2 is Initializable, UUPSUpgradeable {
         uint256 xsauceAmount
     ) internal view {
         if (lynxAmount == 0) revert InvalidAmount();
-        if (LYNX_TOKEN == address(0)) revert TokenNotSet("LYNX");
-        if (WBTC_TOKEN == address(0)) revert TokenNotSet("WBTC");
-        if (USDC_TOKEN == address(0)) revert TokenNotSet("USDC");
-        if (WETH_TOKEN == address(0)) revert TokenNotSet("WETH");
-        if (XSAUCE_TOKEN == address(0)) revert TokenNotSet("XSAUCE");
+        if (LYNX_TOKEN == address(0)) revert TokenNotSet();
+        if (WBTC_TOKEN == address(0)) revert TokenNotSet();
+        if (USDC_TOKEN == address(0)) revert TokenNotSet();
+        if (WETH_TOKEN == address(0)) revert TokenNotSet();
+        if (XSAUCE_TOKEN == address(0)) revert TokenNotSet();
         
         // Calculate required amounts
         (
@@ -467,7 +613,9 @@ contract DepositMinterV2 is Initializable, UUPSUpgradeable {
     }
     
     /**
-     * @dev Internal function to process token deposits using HTS
+     * @dev Internal function to process token deposits using HTS.
+     * Uses transferToken (not transferFrom) - same allowance semantics per v0.35.2, but transferFrom
+     * fails on testnet with CryptoApproveAllowance; transferToken works. User must approve this contract first.
      */
     function _processDeposits(
         uint256 wbtcAmount,
@@ -477,28 +625,28 @@ contract DepositMinterV2 is Initializable, UUPSUpgradeable {
     ) internal {
         uint256 tokensProcessed = 0;
         
-        // Transfer WBTC tokens using HTS
+        // Pull WBTC from user (allowance: owner = msg.sender, spender = this contract)
         int64 wbtcResponse = hts.transferToken(WBTC_TOKEN, msg.sender, address(this), int64(uint64(wbtcAmount)));
         if (wbtcResponse != HederaResponseCodes.SUCCESS) {
             revert HTSOperationFailed("WBTC transfer", wbtcResponse);
         }
         tokensProcessed++;
         
-        // Transfer USDC tokens using HTS
+        // Pull USDC from user
         int64 usdcResponse = hts.transferToken(USDC_TOKEN, msg.sender, address(this), int64(uint64(usdcAmount)));
         if (usdcResponse != HederaResponseCodes.SUCCESS) {
             revert HTSOperationFailed("USDC transfer", usdcResponse);
         }
         tokensProcessed++;
         
-        // Transfer WETH tokens using HTS
+        // Pull WETH from user
         int64 wethResponse = hts.transferToken(WETH_TOKEN, msg.sender, address(this), int64(uint64(wethAmount)));
         if (wethResponse != HederaResponseCodes.SUCCESS) {
             revert HTSOperationFailed("WETH transfer", wethResponse);
         }
         tokensProcessed++;
         
-        // Transfer XSAUCE tokens using HTS
+        // Pull XSAUCE from user
         int64 xsauceResponse = hts.transferToken(XSAUCE_TOKEN, msg.sender, address(this), int64(uint64(xsauceAmount)));
         if (xsauceResponse != HederaResponseCodes.SUCCESS) {
             revert HTSOperationFailed("XSAUCE transfer", xsauceResponse);
@@ -513,19 +661,13 @@ contract DepositMinterV2 is Initializable, UUPSUpgradeable {
      * @dev Internal function to mint and transfer LYNX tokens using HTS
      */
     function _mintAndTransfer(uint256 lynxAmount) internal {
-        // Convert to base units for minting
         uint256 lynxBaseUnits = lynxAmount * (10 ** LYNX_DECIMALS);
-        
         emit MintAttempt(msg.sender, lynxAmount, lynxBaseUnits);
-        
-        // Note: User must be associated with LYNX token before calling this function
-        
-        // Mint LYNX tokens
+
         bytes[] memory metadata = new bytes[](0);
         (int64 mintResponse, int64 newTotalSupply, ) = hts.mintToken(LYNX_TOKEN, int64(uint64(lynxBaseUnits)), metadata);
-        
         emit MintResult(mintResponse, newTotalSupply);
-        
+
         if (mintResponse != HederaResponseCodes.SUCCESS) {
             revert HTSOperationFailed("LYNX mint", mintResponse);
         }
@@ -535,14 +677,13 @@ contract DepositMinterV2 is Initializable, UUPSUpgradeable {
         
         emit TransferAttempt(TREASURY, msg.sender, lynxBaseUnits);
         
-        // Transfer minted tokens from treasury to user using transferToken
-        // Note: Minted tokens go to the treasury account, so we transfer from treasury
+        // Transfer minted tokens from treasury to user using transferToken (transferFrom fails on testnet; same allowance semantics)
         int64 transferResponse = hts.transferToken(LYNX_TOKEN, TREASURY, msg.sender, int64(uint64(lynxBaseUnits)));
         
         emit TransferResult(transferResponse);
         
         if (transferResponse != HederaResponseCodes.SUCCESS) {
-            revert HTSOperationFailed("LYNX transfer from treasury", transferResponse);
+            revert HTSOperationFailed("LYNX transfer to user", transferResponse);
         }
         
         emit LynxMinted(msg.sender, lynxAmount);
@@ -557,14 +698,11 @@ contract DepositMinterV2 is Initializable, UUPSUpgradeable {
         
         emit BurnAttempt(msg.sender, lynxAmount, lynxBaseUnits);
         
-        // Transfer LYNX tokens from user to treasury (burnToken burns from treasury when contract has supply key)
-        try hts.transferToken(LYNX_TOKEN, msg.sender, TREASURY, int64(uint64(lynxBaseUnits))) returns (int64 code) {
-            emit TransferResult(code);
-            if (code != HederaResponseCodes.SUCCESS) {
-                revert HTSOperationFailed("LYNX transfer to treasury for burn", code);
-            }
-        } catch {
-            revert("HTS precompile aborted before returning");
+        // Transfer LYNX from user to treasury using transferToken (transferFrom fails on testnet; same allowance semantics)
+        int64 code = hts.transferToken(LYNX_TOKEN, msg.sender, TREASURY, int64(uint64(lynxBaseUnits)));
+        emit TransferResult(code);
+        if (code != HederaResponseCodes.SUCCESS) {
+            revert HTSOperationFailed("LYNX transfer to treasury", code);
         }
     }
     
@@ -609,7 +747,7 @@ contract DepositMinterV2 is Initializable, UUPSUpgradeable {
         if (wbtcWithdrawal > 0) {
             int64 wbtcResponse = hts.transferToken(WBTC_TOKEN, address(this), msg.sender, int64(uint64(wbtcWithdrawal)));
             if (wbtcResponse != HederaResponseCodes.SUCCESS) {
-                revert HTSOperationFailed("WBTC withdrawal", wbtcResponse);
+                revert HTSOperationFailed("WBTC transfer", wbtcResponse);
             }
             tokensProcessed++;
         }
@@ -618,7 +756,7 @@ contract DepositMinterV2 is Initializable, UUPSUpgradeable {
         if (usdcWithdrawal > 0) {
             int64 usdcResponse = hts.transferToken(USDC_TOKEN, address(this), msg.sender, int64(uint64(usdcWithdrawal)));
             if (usdcResponse != HederaResponseCodes.SUCCESS) {
-                revert HTSOperationFailed("USDC withdrawal", usdcResponse);
+                revert HTSOperationFailed("USDC transfer", usdcResponse);
             }
             tokensProcessed++;
         }
@@ -627,7 +765,7 @@ contract DepositMinterV2 is Initializable, UUPSUpgradeable {
         if (wethWithdrawal > 0) {
             int64 wethResponse = hts.transferToken(WETH_TOKEN, address(this), msg.sender, int64(uint64(wethWithdrawal)));
             if (wethResponse != HederaResponseCodes.SUCCESS) {
-                revert HTSOperationFailed("WETH withdrawal", wethResponse);
+                revert HTSOperationFailed("WETH transfer", wethResponse);
             }
             tokensProcessed++;
         }
@@ -636,7 +774,7 @@ contract DepositMinterV2 is Initializable, UUPSUpgradeable {
         if (xsauceWithdrawal > 0) {
             int64 xsauceResponse = hts.transferToken(XSAUCE_TOKEN, address(this), msg.sender, int64(uint64(xsauceWithdrawal)));
             if (xsauceResponse != HederaResponseCodes.SUCCESS) {
-                revert HTSOperationFailed("XSAUCE withdrawal", xsauceResponse);
+                revert HTSOperationFailed("XSAUCE transfer", xsauceResponse);
             }
             tokensProcessed++;
         }
@@ -661,16 +799,224 @@ contract DepositMinterV2 is Initializable, UUPSUpgradeable {
     // Allow contract to receive HBAR
     receive() external payable {}
 
-
     /**
      * @dev Admin function to adjust the LYNX total supply tracking
      * This allows fixing supply discrepancies without re-deployment
      */
     function adjustSupply(uint256 newSupply) external onlyAdmin {
-        require(newSupply > 0, "Supply must be greater than zero");
+        if (newSupply == 0) revert ZeroSupply();
         uint256 oldSupply = lynxTotalSupply;
         lynxTotalSupply = newSupply * (10 ** LYNX_DECIMALS);
         emit SupplyAdjusted(oldSupply, lynxTotalSupply, newSupply);
+    }
+
+    // ========== LP (thin wrappers – logic in VaultLPManager) ==========
+
+    function setLPManager(address _lpModule) external onlyAdmin {
+        LP_MODULE = _lpModule;
+    }
+
+    function configureSaucerSwap(address, address, address whbar, address whbarHelper) external onlyAdmin {
+        if (LP_MODULE == address(0)) revert LPModuleNotSet();
+        WHBAR_TOKEN = whbar;
+        WHBAR_HELPER = whbarHelper;
+    }
+
+    function associateSaucerSwapTokens() external {
+        if (LP_MODULE == address(0)) revert LPModuleNotSet();
+        ILPModule(LP_MODULE).associateSaucerSwapTokens();
+    }
+
+    function associateTokenAdmin(address token) external onlyAdmin {
+        if (token == address(0)) revert TokenAddressZero();
+        if (LP_MODULE == address(0)) revert LPModuleNotSet();
+        ILPModule(LP_MODULE).associateTokenAdmin(token);
+    }
+
+    function approveSaucerSwapSpending(address token, uint256 amount) external onlyAdmin {
+        if (LP_MODULE == address(0)) revert LPModuleNotSet();
+        ILPModule(LP_MODULE).approveSaucerSwapSpending(token, amount);
+    }
+
+    function createLPPosition(ILPModule.CreateLPParams calldata params) external payable onlyAdmin returns (uint256 tokenSN, uint128 liquidity, uint256 amount0, uint256 amount1) {
+        if (LP_MODULE == address(0)) revert LPModuleNotSet();
+        if (params.token0 != WHBAR_TOKEN) hts.approve(params.token0, LP_MODULE, params.amount0Desired);
+        if (params.token1 != WHBAR_TOKEN) hts.approve(params.token1, LP_MODULE, params.amount1Desired);
+        uint256 hbar = 1e8;
+        if (params.token0 == WHBAR_TOKEN) hbar += params.amount0Desired;
+        if (params.token1 == WHBAR_TOKEN) hbar += params.amount1Desired;
+        (tokenSN, liquidity, amount0, amount1) = ILPModule(LP_MODULE).createLPPosition{value: hbar}(params);
+        emit LPPositionCreated(tokenSN, params.token0, params.token1, params.fee, params.tickLower, params.tickUpper, liquidity, amount0, amount1);
+    }
+
+    function decreaseLPPosition(uint256 tokenSN, uint128 liquidityToRemove, uint256 amount0Min, uint256 amount1Min, uint256 deadline, bool unwrapHbar) external onlyAdmin returns (uint256 amount0, uint256 amount1) {
+        if (LP_MODULE == address(0)) revert LPModuleNotSet();
+        (amount0, amount1) = ILPModule(LP_MODULE).decreaseLPPosition(tokenSN, liquidityToRemove, amount0Min, amount1Min, deadline, unwrapHbar);
+        emit LPPositionDecreased(tokenSN, liquidityToRemove, amount0, amount1);
+    }
+
+    function collectLPFees(uint256 tokenSN, bool unwrapHbar) external onlyAdmin returns (uint256 amount0, uint256 amount1) {
+        if (LP_MODULE == address(0)) revert LPModuleNotSet();
+        (amount0, amount1) = ILPModule(LP_MODULE).collectLPFees(tokenSN, unwrapHbar);
+        emit LPFeesCollected(tokenSN, amount0, amount1);
+    }
+
+    function closeLPPosition(uint256 tokenSN, uint256 amount0Min, uint256 amount1Min, uint256 deadline, bool unwrapHbar) external onlyAdmin returns (uint256 amount0, uint256 amount1) {
+        if (LP_MODULE == address(0)) revert LPModuleNotSet();
+        (amount0, amount1) = ILPModule(LP_MODULE).closeLPPosition(tokenSN, amount0Min, amount1Min, deadline, unwrapHbar);
+        emit LPPositionClosed(tokenSN);
+    }
+
+    /**
+     * @dev Pull token from LP module back to proxy (admin only). Use to recover WHBAR etc.
+     */
+    function withdrawFromLpManager(address token, uint256 amount) external onlyAdmin returns (uint256) {
+        if (LP_MODULE == address(0)) revert LPModuleNotSet();
+        if (token == address(0)) revert TokenAddressZero();
+        ILPModule(LP_MODULE).withdrawToVault(token, amount);
+        emit TokenWithdrawnFromLp(token, amount);
+        return amount;
+    }
+
+    /**
+     * @dev Swap proxy's WHBAR for USDC via SaucerSwap V2 router (admin only).
+     * @param amountIn WHBAR amount (8 decimals)
+     * @param amountOutMinimum Min USDC to receive (6 decimals); use 0 to accept any.
+     * @param swapRouter SaucerSwap V2 SwapRouter EVM address (mainnet: 0x...3c3f6e)
+     */
+    function swapWhbarToUsdc(uint256 amountIn, uint256 amountOutMinimum, address swapRouter) external onlyAdmin returns (uint256 amountOut) {
+        if (swapRouter == address(0) || WHBAR_TOKEN == address(0) || USDC_TOKEN == address(0)) revert TokenAddressZero();
+        uint256 bal = IWHBAR(WHBAR_TOKEN).balanceOf(address(this));
+        if (amountIn > bal) amountIn = bal;
+        if (amountIn == 0) return 0;
+        int64 rc = hts.approve(WHBAR_TOKEN, swapRouter, amountIn);
+        if (rc != HederaResponseCodes.SUCCESS) revert ApprovalFailed(WHBAR_TOKEN);
+        // Path: WHBAR -> fee 1500 (0.15%) -> USDC
+        bytes memory path = abi.encodePacked(
+            WHBAR_TOKEN,
+            uint24(1500),
+            USDC_TOKEN
+        );
+        ISaucerSwapV2Router.ExactInputParams memory params = ISaucerSwapV2Router.ExactInputParams({
+            path: path,
+            recipient: address(this),
+            deadline: block.timestamp + 600,
+            amountIn: amountIn,
+            amountOutMinimum: amountOutMinimum
+        });
+        amountOut = ISaucerSwapV2Router(swapRouter).exactInput(params);
+        emit SwapWhbarToUsdc(amountIn, amountOut);
+        return amountOut;
+    }
+
+    /**
+     * @dev Transfer proxy's WHBAR to LP module for use in LP positions (admin only).
+     */
+    function transferWhbarToLpManager(uint256 amount) external onlyAdmin returns (uint256) {
+        if (WHBAR_TOKEN == address(0) || LP_MODULE == address(0)) revert LPModuleNotSet();
+        uint256 bal = IWHBAR(WHBAR_TOKEN).balanceOf(address(this));
+        if (amount > bal) amount = bal;
+        if (amount == 0) return 0;
+        int64 rc = hts.transferToken(WHBAR_TOKEN, address(this), LP_MODULE, int64(uint64(amount)));
+        if (rc != HederaResponseCodes.SUCCESS) revert ApprovalFailed(WHBAR_TOKEN);
+        emit WhbarTransferredToLp(LP_MODULE, amount);
+        return amount;
+    }
+
+    /**
+     * @dev Set burn reward vault (admin only). Only this contract can call transferHbarTo.
+     */
+    function setRewardVault(address _rewardVault) external onlyAdmin {
+        address old = rewardVault;
+        rewardVault = _rewardVault;
+        emit RewardVaultUpdated(old, _rewardVault);
+    }
+
+    /**
+     * @dev Send HBAR to recipient. Only callable by rewardVault (BurnRewardVault).
+     */
+    function transferHbarTo(address to, uint256 amount) external {
+        if (msg.sender != rewardVault) revert OnlyRewardVault();
+        if (address(this).balance < amount) revert InsufficientVaultHbar();
+        payable(to).transfer(amount);
+    }
+
+    function getLPPositions() external view returns (uint256[] memory) {
+        if (LP_MODULE == address(0)) return new uint256[](0);
+        return ILPModule(LP_MODULE).getLPPositions();
+    }
+
+    function getActiveLPPositionCount() external view returns (uint256 count) {
+        if (LP_MODULE == address(0)) return 0;
+        return ILPModule(LP_MODULE).getActiveLPPositionCount();
+    }
+
+    function getLPPositionDetails(uint256 tokenSN) external view returns (address token0, address token1, uint24 fee, int24 tickLower, int24 tickUpper, uint128 liquidity) {
+        if (LP_MODULE == address(0)) return (address(0), address(0), 0, 0, 0, 0);
+        return ILPModule(LP_MODULE).getLPPositionDetails(tokenSN);
+    }
+
+    function configureSaucerSwapV1(address router) external onlyAdmin {
+        if (LP_MODULE == address(0)) revert LPModuleNotSet();
+        ILPModule(LP_MODULE).configureSaucerSwapV1(router);
+        emit SaucerSwapV1ConfigUpdated(router);
+    }
+
+    function approveSaucerSwapV1Spending(address token, uint256 amount) external onlyAdmin {
+        if (LP_MODULE == address(0)) revert LPModuleNotSet();
+        ILPModule(LP_MODULE).approveSaucerSwapV1Spending(token, amount);
+        emit TokenApprovalGranted(token, LP_MODULE, amount);
+    }
+
+    function addLiquidityV1ETH(
+        address token,
+        uint256 amountTokenDesired,
+        uint256 amountTokenMin,
+        uint256 amountHBARMin,
+        uint256 deadline
+    ) external payable onlyAdmin returns (uint256 amountToken, uint256 amountHBAR, uint256 liquidity) {
+        if (LP_MODULE == address(0)) revert LPModuleNotSet();
+        (amountToken, amountHBAR, liquidity) = ILPModule(LP_MODULE).addLiquidityV1ETH{value: msg.value}(token, amountTokenDesired, amountTokenMin, amountHBARMin, deadline);
+        emit V1LiquidityAdded(token, address(0), amountToken, amountHBAR, liquidity);
+    }
+
+    function addLiquidityV1(
+        address tokenA,
+        address tokenB,
+        uint256 amountADesired,
+        uint256 amountBDesired,
+        uint256 amountAMin,
+        uint256 amountBMin,
+        uint256 deadline
+    ) external onlyAdmin returns (uint256 amountA, uint256 amountB, uint256 liquidity) {
+        if (LP_MODULE == address(0)) revert LPModuleNotSet();
+        (amountA, amountB, liquidity) = ILPModule(LP_MODULE).addLiquidityV1(tokenA, tokenB, amountADesired, amountBDesired, amountAMin, amountBMin, deadline);
+        emit V1LiquidityAdded(tokenA, tokenB, amountA, amountB, liquidity);
+    }
+
+    function removeLiquidityV1ETH(
+        address token,
+        uint256 liquidity,
+        uint256 amountTokenMin,
+        uint256 amountHBARMin,
+        uint256 deadline
+    ) external onlyAdmin returns (uint256 amountToken, uint256 amountHBAR) {
+        if (LP_MODULE == address(0)) revert LPModuleNotSet();
+        (amountToken, amountHBAR) = ILPModule(LP_MODULE).removeLiquidityV1ETH(token, liquidity, amountTokenMin, amountHBARMin, deadline);
+        emit V1LiquidityRemoved(token, address(0), amountToken, amountHBAR, liquidity);
+    }
+
+    function removeLiquidityV1(
+        address tokenA,
+        address tokenB,
+        uint256 liquidity,
+        uint256 amountAMin,
+        uint256 amountBMin,
+        uint256 deadline
+    ) external onlyAdmin returns (uint256 amountA, uint256 amountB) {
+        if (LP_MODULE == address(0)) revert LPModuleNotSet();
+        (amountA, amountB) = ILPModule(LP_MODULE).removeLiquidityV1(tokenA, tokenB, liquidity, amountAMin, amountBMin, deadline);
+        emit V1LiquidityRemoved(tokenA, tokenB, amountA, amountB, liquidity);
     }
 
     /**

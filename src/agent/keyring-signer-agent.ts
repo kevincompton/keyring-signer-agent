@@ -148,7 +148,7 @@ CRITICAL RISK - MUST REJECT:
 2. setGovernanceAddress:
    - Setting to zero address (0x0000000000000000000000000000000000000000)
    - Setting to unexpected/unknown addresses without governance approval
-3. Unknown or unexpected function calls not in the contract ABI
+3. Unknown or unexpected function calls not in the DepositMinterV2 or VaultLPManager ABI
 4. Calls to admin-only functions from non-admin addresses
 
 HIGH RISK - INVESTIGATE CAREFULLY:
@@ -167,6 +167,21 @@ MEDIUM RISK - VALIDATE THOROUGHLY:
 LOW RISK - LIKELY SAFE TO SIGN:
 1. mintWithDeposits with correct deposit ratios matching current configuration
 2. Small ratio adjustments within expected governance parameters
+
+VALIDATION RULES FOR VAULTLP MANAGER (VaultLPManager) - LP staking / SaucerSwap:
+
+The threshold account (this agent signs for it) IS the admin for Lynx contracts. Admin operations and transfers between LP manager and vault are normal when the threshold schedules them — no special approval needed.
+
+CRITICAL RISK - MUST REJECT:
+1. Unknown function calls not in either DepositMinterV2 or VaultLPManager ABI
+
+LOW RISK - LIKELY SAFE TO SIGN (all known VaultLPManager functions when threshold is payer):
+- LP operations: createLPPosition, closeLPPosition, decreaseLPPosition, collectLPFees
+- V1 liquidity: addLiquidityV1, addLiquidityV1ETH, removeLiquidityV1, removeLiquidityV1ETH
+- Admin/config: setVault, configureSaucerSwap, configureSaucerSwapV1, setCompositionToken, associateTokenAdmin, approveSaucerSwapSpending, approveSaucerSwapV1Spending, associateSaucerSwapTokens
+- Transfers: withdrawToVault, withdrawHbarToVault - moving tokens/HBAR between LP manager and proxy (vault) is normal admin operation
+
+When contractHint is "VaultLPManager", treat as LOW RISK unless parameters look suspicious (e.g. zero address for setVault, extreme values).
 
 WORKFLOW:
 - Use your scratchpad to remember information across steps (operator IDs, pending transactions, contract details)
@@ -329,9 +344,10 @@ Return ONLY the operator account ID in format 0.0.xxxxx` }],
         try {
             const lynxToken = readFileSync(join(process.cwd(), 'src/projects/contracts/LynxToken.sol'), 'utf-8');
             const depositMinter = readFileSync(join(process.cwd(), 'src/projects/contracts/DepositMinterV2.sol'), 'utf-8');
+            const vaultLPManager = readFileSync(join(process.cwd(), 'src/projects/contracts/VaultLPManager.sol'), 'utf-8');
             
             const result = await this.agent?.invoke({
-                messages: [{ role: "human", content: `Review these Hedera smart contracts:\n\nLynxToken:\n${lynxToken}\n\nDepositMinterV2:\n${depositMinter} and save them in memory to compare to transactions later. Respond with contract and ABI loaded boolean.` }],
+                messages: [{ role: "human", content: `Review these Hedera smart contracts:\n\nLynxToken:\n${lynxToken}\n\nDepositMinterV2:\n${depositMinter}\n\nVaultLPManager:\n${vaultLPManager}\n\nSave them in memory. Lynx uses DepositMinterV2 for minting and VaultLPManager for LP staking (createLPPosition, closeLPPosition, etc.). Respond with contract and ABI loaded boolean.` }],
             }, { configurable: { thread_id: "keyring-signer" } });
             console.log("✅ Contract review:", getAgentOutput(result ?? {}));
             
@@ -450,8 +466,9 @@ STEP 1: Get full transaction details
 
 STEP 2: Analyze the transaction
 - Check the function name and parameters against the validation rules in your system prompt
-- Compare parameters to the DepositMinterV2 contract constraints
-- Identify any red flags (invalid ratios, zero addresses, insufficient deposits, etc.)
+- If contractHint is "VaultLPManager": use VaultLPManager rules (createLPPosition, closeLPPosition, etc. are LOW RISK)
+- If DepositMinterV2: compare parameters to DepositMinterV2 constraints (ratios, deposits)
+- Identify any red flags (invalid ratios, zero addresses, insufficient deposits, admin functions, etc.)
 - Determine risk level: low, medium, high, or critical
 
 STEP 3: Post validation message
