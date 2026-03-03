@@ -181,7 +181,7 @@ LOW RISK - LIKELY SAFE TO SIGN (all known VaultLPManager functions when threshol
 - Admin/config: setVault, configureSaucerSwap, configureSaucerSwapV1, setCompositionToken, associateTokenAdmin, approveSaucerSwapSpending, approveSaucerSwapV1Spending, associateSaucerSwapTokens
 - Transfers: withdrawToVault, withdrawHbarToVault - moving tokens/HBAR between LP manager and proxy (vault) is normal admin operation
 
-When contractHint is "VaultLPManager", treat as LOW RISK unless parameters look suspicious (e.g. zero address for setVault, extreme values).
+When contractHint is "VaultLPManager", treat as LOW RISK unless parameters look suspicious (e.g. zero address for setVault). Note: tickLower and tickUpper (int24) can be negative — that is normal for concentrated liquidity, not a red flag.
 
 WORKFLOW:
 - Use your scratchpad to remember information across steps (operator IDs, pending transactions, contract details)

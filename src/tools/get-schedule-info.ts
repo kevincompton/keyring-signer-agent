@@ -142,8 +142,8 @@ export class GetScheduleInfoTool extends StructuredTool {
                 };
             }
 
-            // Decode the function call using the ABI (tries DepositMinterV2, then VaultLPManager)
-            const decodedFunction = this.decodeFunctionCall(contractInfo.functionParameters);
+            // Decode using contract ID to pick ABI: LP Manager (0.0.7842637) -> VaultLPManager, else DepositMinterV2
+            const decodedFunction = this.decodeFunctionCall(contractInfo.functionParameters, contractInfo.contractId);
 
             const result: Record<string, unknown> = {
                 decoded: true,
@@ -326,16 +326,24 @@ export class GetScheduleInfoTool extends StructuredTool {
         return value;
     }
 
-    private decodeFunctionCall(functionParamsHex: string): { functionName: string; parameters: any; contractHint?: string } {
+    private decodeFunctionCall(functionParamsHex: string, contractId?: string | null): { functionName: string; parameters: any; contractHint?: string } {
         try {
             const cleanHex = functionParamsHex.startsWith('0x') ? functionParamsHex.slice(2) : functionParamsHex;
             const data = '0x' + cleanHex;
 
-            // Try DepositMinterV2 first, then VaultLPManager
-            const abis: { name: string; abi: any[] }[] = [
-                { name: 'DepositMinterV2', abi: this.depositMinterAbi },
-                { name: 'VaultLPManager', abi: this.vaultLPManagerAbi },
-            ];
+            // Both contracts have createLPPosition (same selector). Use contract ID to pick ABI.
+            const lpManagerIds = (process.env.LYNX_LP_MANAGER_CONTRACT || '0.0.7842637').split(',').map((s) => s.trim());
+            const isLpManager = contractId && lpManagerIds.includes(contractId);
+
+            const abis: { name: string; abi: any[] }[] = isLpManager
+                ? [
+                    { name: 'VaultLPManager', abi: this.vaultLPManagerAbi },
+                    { name: 'DepositMinterV2', abi: this.depositMinterAbi },
+                ]
+                : [
+                    { name: 'DepositMinterV2', abi: this.depositMinterAbi },
+                    { name: 'VaultLPManager', abi: this.vaultLPManagerAbi },
+                ];
 
             for (const { name, abi } of abis) {
                 if (abi.length === 0) continue;
