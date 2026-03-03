@@ -312,6 +312,20 @@ export class GetScheduleInfoTool extends StructuredTool {
         return `${shard}.${realm}.${num}`;
     }
 
+    /** Recursively convert BigInt to string so JSON.stringify works. */
+    private serializeForJson(value: unknown): unknown {
+        if (typeof value === 'bigint') return value.toString();
+        if (Array.isArray(value)) return value.map((v) => this.serializeForJson(v));
+        if (value !== null && typeof value === 'object') {
+            const out: Record<string, unknown> = {};
+            for (const [k, v] of Object.entries(value)) {
+                out[k] = this.serializeForJson(v);
+            }
+            return out;
+        }
+        return value;
+    }
+
     private decodeFunctionCall(functionParamsHex: string): { functionName: string; parameters: any; contractHint?: string } {
         try {
             const cleanHex = functionParamsHex.startsWith('0x') ? functionParamsHex.slice(2) : functionParamsHex;
@@ -332,7 +346,7 @@ export class GetScheduleInfoTool extends StructuredTool {
                         const params: Record<string, unknown> = {};
                         decoded.fragment.inputs.forEach((input, index) => {
                             const value = decoded.args[index];
-                            params[input.name || `param${index}`] = typeof value === 'bigint' ? value.toString() : value;
+                            params[input.name || `param${index}`] = this.serializeForJson(value);
                         });
                         return { functionName: decoded.name, parameters: params, contractHint: name };
                     }
