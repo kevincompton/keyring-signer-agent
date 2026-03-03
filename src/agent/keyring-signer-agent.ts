@@ -1,5 +1,5 @@
 import { config } from 'dotenv';
-import { Client } from '@hashgraph/sdk';
+import { Client, TopicMessageQuery } from '@hashgraph/sdk';
 import { EnvironmentConfig } from './agent-config.js';
 import { HederaLangchainToolkit, AgentMode, coreAccountPlugin, coreConsensusPlugin, coreConsensusQueryPlugin } from 'hedera-agent-kit';
 import { createAgent } from 'langchain';
@@ -45,6 +45,10 @@ export class KeyringSignerAgent {
     // State for pending transactions
     private pendingScheduleIds: string[] = [];
     private lynxOperatorId: string = '';
+
+    // Validator inbound subscription
+    private isRunningCheck: boolean = false;
+    private runCheckAgain: boolean = false;
 
     constructor() {
         this.env = process.env as NodeJS.ProcessEnv & EnvironmentConfig;
@@ -226,13 +230,61 @@ You are account ${this.env.HEDERA_ACCOUNT_ID} operating on ${this.env.HEDERA_NET
         try {
             await this.loadProjectDetails();
             await this.loadContractDetails();
-            await this.fetchPendingTransactions();
-            await this.reviewAllPendingTransactions();
-            
+            await this.runCheck();
+
+            const inboundTopicId = this.env.PROJECT_VALIDATOR_INBOUND_TOPIC;
+            if (inboundTopicId && inboundTopicId !== '0.0.0' && this.client) {
+                console.log(`\n📥 Subscribing to validator inbound topic: ${inboundTopicId}`);
+                console.log('   (Message received = trigger check)\n');
+                this.subscribeToValidatorInbound(inboundTopicId);
+            } else {
+                console.log('\n✅ Initial check complete. No validator inbound topic configured for subscription.');
+            }
         } catch (error) {
             console.error("❌ Error starting keyring signer agent:", error);
             throw error;
         }
+    }
+
+    /** Runs fetch + review. Used on startup and when validator inbound message received. */
+    private async runCheck(): Promise<void> {
+        if (this.isRunningCheck) {
+            this.runCheckAgain = true;
+            return;
+        }
+        this.isRunningCheck = true;
+        this.runCheckAgain = false;
+        try {
+            await this.fetchPendingTransactions();
+            await this.reviewAllPendingTransactions();
+        } finally {
+            this.isRunningCheck = false;
+            if (this.runCheckAgain && this.isRunning) {
+                console.log('\n📥 Triggered by inbound message, running check again...');
+                await this.runCheck();
+            }
+        }
+    }
+
+    private subscribeToValidatorInbound(topicId: string): void {
+        if (!this.client) {
+            throw new Error('Client not initialized');
+        }
+        new TopicMessageQuery()
+            .setTopicId(topicId)
+            .subscribe(this.client, (msg, err) => {
+                if (err) {
+                    console.error('❌ Validator inbound subscription error:', err);
+                }
+            }, (message) => {
+                const messageAsString = new TextDecoder().decode(message.contents);
+                console.log(
+                    `\n📥 ${message.consensusTimestamp.toDate().toISOString()} Validator inbound message received: ${messageAsString}`
+                );
+                this.runCheck().catch((err) => {
+                    console.error('❌ Error running check from inbound trigger:', err);
+                });
+            });
     }
 
     async stop(): Promise<void> {

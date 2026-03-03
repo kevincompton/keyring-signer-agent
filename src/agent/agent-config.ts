@@ -11,5 +11,6 @@ export interface EnvironmentConfig {
     PROJECT_AUDIT_TOPIC?: string;
     PROJECT_REJECTION_TOPIC?: string;
     PROJECT_VALIDATOR_TOPIC?: string;
+    PROJECT_VALIDATOR_INBOUND_TOPIC?: string;
     LYNX_REGISTRATION_TX?: string;
 }
