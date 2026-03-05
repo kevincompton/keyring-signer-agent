@@ -10,6 +10,7 @@ interface PendingSchedule {
     signatures?: Array<{ public_key_prefix: string }>;
     executed_timestamp?: string;
     deleted?: boolean;
+    expiration_time?: string;
 }
 
 export class FetchPendingTransactionsTool extends StructuredTool {
@@ -55,10 +56,18 @@ export class FetchPendingTransactionsTool extends StructuredTool {
             const allPendingSchedules: PendingSchedule[] = [];
 
             // Process each schedule
+            const now = new Date();
             for (const schedule of schedules) {
-                // Skip executed or deleted schedules
+                // Skip executed, deleted, or expired schedules
                 if (schedule.executed_timestamp || schedule.deleted) {
                     continue;
+                }
+                if (schedule.expiration_time) {
+                    const exp = new Date(schedule.expiration_time);
+                    if (exp <= now) {
+                        console.log(`[FETCH_PENDING_TX] Skipping expired schedule: ${schedule.schedule_id}`);
+                        continue;
+                    }
                 }
 
                 // Decode transaction body to find involved accounts
