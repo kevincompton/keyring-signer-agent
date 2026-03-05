@@ -178,10 +178,12 @@ CRITICAL RISK - MUST REJECT:
 LOW RISK - LIKELY SAFE TO SIGN (all known VaultLPManager functions when threshold is payer):
 - LP operations: createLPPosition, closeLPPosition, decreaseLPPosition, collectLPFees
 - V1 liquidity: addLiquidityV1, addLiquidityV1ETH, removeLiquidityV1, removeLiquidityV1ETH
-- Admin/config: setVault, configureSaucerSwap, configureSaucerSwapV1, setCompositionToken, associateTokenAdmin, approveSaucerSwapSpending, approveSaucerSwapV1Spending, associateSaucerSwapTokens
+- Admin/config: setVault, setAdmin, configureSaucerSwap, configureSaucerSwapV1, setCompositionToken, associateTokenAdmin, approveSaucerSwapSpending, approveSaucerSwapV1Spending, associateSaucerSwapTokens
 - Transfers: withdrawToVault, withdrawHbarToVault - moving tokens/HBAR between LP manager and proxy (vault) is normal admin operation
 
-When contractHint is "VaultLPManager", treat as LOW RISK unless parameters look suspicious (e.g. zero address for setVault). Note: tickLower and tickUpper (int24) can be negative — that is normal for concentrated liquidity, not a red flag.
+setAdmin(address newAdmin): When memo indicates admin action (e.g. "Lynx: setAdmin 0.0.xxxxx on 0.0.yyyyy") and threshold is payer, treat as LOW RISK. REJECT only if newAdmin is zero address (0x0000000000000000000000000000000000000000).
+
+When contractHint is "VaultLPManager" or "DepositMinterV2/VaultLPManager", treat as LOW RISK unless parameters look suspicious (e.g. zero address for setVault or setAdmin). Note: tickLower and tickUpper (int24) can be negative — that is normal for concentrated liquidity, not a red flag.
 
 WORKFLOW:
 - Use your scratchpad to remember information across steps (operator IDs, pending transactions, contract details)

@@ -36,11 +36,12 @@ async function createValidatorTopic(client: Client, network: string, operatorKey
         }
     }
 
-    // Create a new HCS-2 indexed topic for agent validations
-    console.log(`📝 Creating new Agent Validator topic on ${network.toUpperCase()} (HCS-2 indexed)...`);
+    // Create a new HCS-2 indexed topic for agent validations (Agent operator only - private)
+    console.log(`📝 Creating new Agent Validator topic on ${network.toUpperCase()} (HCS-2 indexed, private)...`);
     const createTopicTx = new TopicCreateTransaction()
         .setTopicMemo('hcs-2:0:86400') // HCS-2 indexed topic, 24 hour TTL
-        .setSubmitKey(operatorKey.publicKey);
+        .setSubmitKey(operatorKey.publicKey)
+        .setAdminKey(operatorKey.publicKey);
 
     const createResponse = await createTopicTx.execute(client);
     const createReceipt = await createResponse.getReceipt(client);

@@ -363,6 +363,27 @@ export class GetScheduleInfoTool extends StructuredTool {
                 }
             }
 
+            // Fallback: known selectors not in compiled ABIs (e.g. setAdmin from proxy/admin contracts)
+            const selector = cleanHex.slice(0, 8);
+            if (selector === '704b6c02') {
+                // setAdmin(address) - both DepositMinterV2 and VaultLPManager have this
+                try {
+                    const setAdminAbi = ['function setAdmin(address newAdmin)'];
+                    const iface = new ethers.Interface(setAdminAbi);
+                    const decoded = iface.parseTransaction({ data });
+                    if (decoded) {
+                        const params: Record<string, unknown> = {};
+                        decoded.fragment.inputs.forEach((input, index) => {
+                            const value = decoded.args[index];
+                            params[input.name || `param${index}`] = this.serializeForJson(value);
+                        });
+                        return { functionName: 'setAdmin', parameters: params, contractHint: 'DepositMinterV2/VaultLPManager' };
+                    }
+                } catch {
+                    // fall through to Unknown
+                }
+            }
+
             return {
                 functionName: 'Unknown',
                 parameters: { rawHex: functionParamsHex }

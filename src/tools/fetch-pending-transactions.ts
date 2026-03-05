@@ -135,12 +135,34 @@ export class FetchPendingTransactionsTool extends StructuredTool {
                                     console.log(`[FETCH_PENDING_TX] Found my key in threshold list: ${acctId}`);
                                     
                                     const mySignature = schedule.signatures?.find((sig: any) => {
-                                        // Compare public key prefix (base64 encoded) - must match OPERATOR_PUBLIC_KEY exactly
+                                        if (!sig.public_key_prefix) return false;
                                         const sigKeyHex = Buffer.from(sig.public_key_prefix, 'base64').toString('hex');
-                                        return sigKeyHex === agentPublicKey || agentPublicKey.includes(sigKeyHex);
+                                        // Mirror returns 6-byte prefix (12 hex chars); agent key may be full 32-byte (64 hex)
+                                        return (
+                                            sigKeyHex === agentPublicKey ||
+                                            agentPublicKey.startsWith(sigKeyHex) ||
+                                            (sigKeyHex.length >= 12 && agentPublicKey.toLowerCase().startsWith(sigKeyHex.toLowerCase()))
+                                        );
                                     });
 
                                     if (!mySignature) {
+                                        // List may omit signatures; fetch schedule detail to verify
+                                        if (!schedule.signatures || schedule.signatures.length === 0) {
+                                            const detailRes = await fetch(`${mirrorNodeUrl}/api/v1/schedules/${schedule.schedule_id}`);
+                                            if (detailRes.ok) {
+                                                const detail = await detailRes.json();
+                                                const sigs = detail.signatures || [];
+                                                const alreadySigned = sigs.some((sig: { public_key_prefix?: string }) => {
+                                                    if (!sig.public_key_prefix) return false;
+                                                    const ph = Buffer.from(sig.public_key_prefix, 'base64').toString('hex');
+                                                    return agentPublicKey.startsWith(ph) || (ph.length >= 12 && agentPublicKey.toLowerCase().startsWith(ph.toLowerCase()));
+                                                });
+                                                if (alreadySigned) {
+                                                    console.log(`[FETCH_PENDING_TX] Already signed (from detail): ${schedule.schedule_id}`);
+                                                    break;
+                                                }
+                                            }
+                                        }
                                         requiresMySignature = true;
                                         console.log(`[FETCH_PENDING_TX] Schedule requires my signature: ${schedule.schedule_id}`);
                                         break;

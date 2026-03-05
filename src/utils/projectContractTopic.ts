@@ -28,12 +28,13 @@ interface ProjectContractsData {
 }
 
 async function createProjectContractTopic(client: Client, projectAccountId: string, operatorKey: PrivateKey): Promise<string> {
-    // Create a new HCS-2 non-indexed topic for this project's contract list
-    console.log(`📝 Creating Project Contracts Topic for ${projectAccountId} (HCS-2 non-indexed)...`);
+    // Create a new HCS-2 non-indexed topic for this project's contract list (Keyring operator only - private)
+    console.log(`📝 Creating Project Contracts Topic for ${projectAccountId} (HCS-2 non-indexed, private)...`);
     
     const createTopicTx = new TopicCreateTransaction()
         .setTopicMemo(`hcs-2:${projectAccountId}:contracts`) // HCS-2 non-indexed, project-specific
-        .setSubmitKey(operatorKey.publicKey);
+        .setSubmitKey(operatorKey.publicKey)
+        .setAdminKey(operatorKey.publicKey);
 
     const createResponse = await createTopicTx.execute(client);
     const createReceipt = await createResponse.getReceipt(client);

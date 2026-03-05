@@ -3,7 +3,7 @@ import { config } from 'dotenv';
 config(); // Loads .env by default
 
 // Now import everything else
-import { Client, TopicMessageSubmitTransaction, TopicCreateTransaction, TopicInfoQuery, PrivateKey, AccountId } from '@hashgraph/sdk';
+import { Client, TopicMessageSubmitTransaction, TopicCreateTransaction, TopicInfoQuery, PrivateKey, AccountId, KeyList, PublicKey } from '@hashgraph/sdk';
 
 // Get network from environment variable
 const NETWORK = process.env.HEDERA_NETWORK || 'testnet';
@@ -16,6 +16,42 @@ interface RejectionMessage {
     feedback: string;
     timestamp: string;
     projectRegistrationTxId: string; // Transaction ID of the project registration
+}
+
+function parseKeyToPublicKey(keyStr: string): PublicKey {
+    try {
+        if (keyStr.startsWith('302a') || keyStr.startsWith('302d')) return PublicKey.fromString(keyStr);
+        if (keyStr.startsWith('302e')) return PrivateKey.fromString(keyStr).publicKey;
+        if (keyStr.length === 64 && /^[0-9a-fA-F]+$/.test(keyStr)) return PublicKey.fromBytesED25519(Buffer.from(keyStr, 'hex'));
+        return PublicKey.fromString(keyStr);
+    } catch {
+        throw new Error(`Failed to parse key: ${keyStr.slice(0, 20)}...`);
+    }
+}
+
+/** Parse threshold signer public keys from env. Supports THRESHOLD_SIGNER_PUBLIC_KEYS (comma-separated) or OPERATOR_PUBLIC_KEY + TEST_SIGNER1/2. */
+function parseThresholdSignerKeys(): PublicKey[] {
+    const keysEnv = process.env.THRESHOLD_SIGNER_PUBLIC_KEYS;
+    if (keysEnv) {
+        const keys = keysEnv.split(',').map((k) => k.trim()).filter(Boolean);
+        if (keys.length === 0) throw new Error('THRESHOLD_SIGNER_PUBLIC_KEYS is empty');
+        return keys.map((keyStr, index) => {
+            try {
+                return parseKeyToPublicKey(keyStr);
+            } catch (e) {
+                throw new Error(`Failed to parse threshold signer key ${index + 1}: ${keyStr.slice(0, 20)}...`);
+            }
+        });
+    }
+    const operatorKey = process.env.OPERATOR_PUBLIC_KEY;
+    const signer1 = process.env.TEST_SIGNER1;
+    const signer2 = process.env.TEST_SIGNER2;
+    const keys: PublicKey[] = [];
+    if (operatorKey) keys.push(parseKeyToPublicKey(operatorKey));
+    if (signer1) keys.push(parseKeyToPublicKey(signer1));
+    if (signer2) keys.push(parseKeyToPublicKey(signer2));
+    if (keys.length === 0) throw new Error('Set THRESHOLD_SIGNER_PUBLIC_KEYS (comma-separated) or OPERATOR_PUBLIC_KEY + TEST_SIGNER1/2');
+    return keys;
 }
 
 async function getOrCreateRejectionTopic(client: Client, network: string, operatorKey: PrivateKey): Promise<string> {
@@ -36,18 +72,23 @@ async function getOrCreateRejectionTopic(client: Client, network: string, operat
         }
     }
 
-    // Create a new HCS-2 indexed topic for transaction rejections
-    console.log(`📝 Creating new Transaction Rejection topic on ${network.toUpperCase()} (HCS-2 indexed)...`);
+    const signerKeys = parseThresholdSignerKeys();
+    const submitKeyList = new KeyList(signerKeys, 1); // Any one threshold signer can submit
+
+    // Create a new HCS-2 indexed topic for transaction rejections (Threshold signers only - private)
+    console.log(`📝 Creating new Transaction Rejection topic on ${network.toUpperCase()} (HCS-2 indexed, private, ${signerKeys.length} signers)...`);
     const createTopicTx = new TopicCreateTransaction()
         .setTopicMemo('hcs-2:0:86400') // HCS-2 indexed topic, 24 hour TTL
-        .setSubmitKey(operatorKey.publicKey);
+        .setSubmitKey(submitKeyList)
+        .setAdminKey(operatorKey.publicKey);
 
     const createResponse = await createTopicTx.execute(client);
     const createReceipt = await createResponse.getReceipt(client);
     const newTopicId = createReceipt.topicId!.toString();
 
     console.log(`✅ Created new ${network} rejection topic with ID:`, newTopicId);
-    console.log(`\n📋 Add this to your .env file:\nPROJECT_REJECTION_TOPIC=${newTopicId}\n`);
+    console.log(`\n📋 Add this to your .env file:\nPROJECT_REJECTION_TOPIC=${newTopicId}`);
+    console.log(`\n💡 Threshold signers (submit key): Set THRESHOLD_SIGNER_PUBLIC_KEYS=key1,key2,key3 or use OPERATOR_PUBLIC_KEY + TEST_SIGNER1/2\n`);
     return newTopicId;
 }
 

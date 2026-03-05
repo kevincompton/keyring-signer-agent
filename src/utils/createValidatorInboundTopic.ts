@@ -44,7 +44,7 @@ async function getOrCreateValidatorInboundTopic(
     const feeHbar = parseFloat(process.env.VALIDATOR_INBOUND_TOPIC_FEE_HBAR || String(DEFAULT_TOPIC_FEE_HBAR));
     const topicFee = new Hbar(feeHbar);
 
-    console.log(`📝 Creating Validator Inbound topic on ${network.toUpperCase()} (HCS-2 non-indexed, HIP-991 fees: ${topicFee} per message)...`);
+    console.log(`📝 Creating Validator Inbound topic on ${network.toUpperCase()} (HCS-2 non-indexed, private, HIP-991 fees: ${topicFee} per message)...`);
 
     const customFee = new CustomFixedFee({
         feeCollectorAccountId: operatorId,
@@ -52,6 +52,8 @@ async function getOrCreateValidatorInboundTopic(
 
     const createTopicTx = new TopicCreateTransaction()
         .setTopicMemo(`hcs-2:${operatorId}:validator-inbound`) // HCS-2 non-indexed
+        .setSubmitKey(operatorKey.publicKey) // Project operator (Lynx) only - private
+        .setAdminKey(operatorKey.publicKey)
         .setFeeScheduleKey(operatorKey.publicKey)
         .addFeeExemptKey(operatorKey.publicKey) // Operator can submit without paying
         .addCustomFee(customFee);

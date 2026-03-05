@@ -30,12 +30,13 @@ interface ProjectAuditData {
 }
 
 async function createProjectAuditTopic(client: Client, projectAccountId: string, operatorKey: PrivateKey): Promise<string> {
-    // Create a new HCS-2 indexed topic for this project's contract audits
-    console.log(`📝 Creating Project Audit Topic for ${projectAccountId} (HCS-2 indexed)...`);
+    // Create a new HCS-2 indexed topic for this project's contract audits (Keyring operator only - private)
+    console.log(`📝 Creating Project Audit Topic for ${projectAccountId} (HCS-2 indexed, private)...`);
     
     const createTopicTx = new TopicCreateTransaction()
         .setTopicMemo(`hcs-2:0:86400`) // HCS-2 indexed, 24 hour TTL
-        .setSubmitKey(operatorKey.publicKey);
+        .setSubmitKey(operatorKey.publicKey)
+        .setAdminKey(operatorKey.publicKey);
 
     const createResponse = await createTopicTx.execute(client);
     const createReceipt = await createResponse.getReceipt(client);
