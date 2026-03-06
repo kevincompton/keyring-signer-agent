@@ -205,9 +205,14 @@ TOOLS AT YOUR DISPOSAL:
 - sign_transaction: Sign approved transactions
 - SUBMIT_TOPIC_MESSAGE_TOOL: Post validation/rejection messages to HCS topics
 
+IMPORTANT: Hedera scheduled transactions are immutable — they cannot be deleted. Do not attempt to delete schedules. For invalid or unwanted schedules, post a rejection and do not sign; the schedule will expire if not executed.
+
 You are account ${this.env.HEDERA_ACCOUNT_ID} operating on ${this.env.HEDERA_NETWORK || 'testnet'}.`;
 
-            const hederaTools = this.hederaAgentToolkit.getTools();
+            // Exclude schedule_delete_tool: Hedera schedules are immutable and cannot be deleted
+            const hederaTools = this.hederaAgentToolkit.getTools().filter(
+                (t: { name?: string }) => t.name !== 'schedule_delete_tool'
+            );
             const fetchPendingTransactionsTool = new FetchPendingTransactionsTool(this.client);
             const signTransactionTool = new SignTransactionTool(this.client);
             const queryRegistryTool = new QueryRegistryTopicTool(this.env.HEDERA_NETWORK || 'testnet');
@@ -488,7 +493,7 @@ STEP 3: Post validation message
 STEP 4: Take action based on risk
 - If LOW or MEDIUM risk: Use sign_transaction tool with scheduleId="${scheduleId}"
 - If HIGH or CRITICAL risk:
-  * Post detailed rejection to topic ${this.env.PROJECT_REJECTION_TOPIC} explaining the security issue
+  * Post rejection to topic ${this.env.PROJECT_REJECTION_TOPIC}. Include schedule_id and signer (${this.env.HEDERA_ACCOUNT_ID}) in the message so this agent can filter them on future fetches.
   * DO NOT sign the transaction
   * Report that transaction was rejected
 

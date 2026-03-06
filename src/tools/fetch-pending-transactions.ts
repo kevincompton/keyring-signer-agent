@@ -24,6 +24,50 @@ export class FetchPendingTransactionsTool extends StructuredTool {
         super();
     }
 
+    /** Fetch schedule IDs this agent has rejected from the HCS-2 indexed rejection topic. */
+    private async getRejectedScheduleIds(mirrorNodeUrl: string): Promise<Set<string>> {
+        const rejectionTopicId = process.env.PROJECT_REJECTION_TOPIC;
+        const agentAccountId = process.env.HEDERA_ACCOUNT_ID;
+        if (!rejectionTopicId || rejectionTopicId === '0.0.0' || !agentAccountId) {
+            return new Set();
+        }
+
+        try {
+            const url = `${mirrorNodeUrl}/api/v1/topics/${rejectionTopicId}/messages?limit=100&order=desc`;
+            const res = await fetch(url);
+            if (!res.ok) return new Set();
+
+            const data = await res.json();
+            const messages = data.messages || [];
+            const rejected = new Set<string>();
+
+            for (const msg of messages) {
+                try {
+                    const decoded = Buffer.from(msg.message, 'base64').toString('utf-8');
+                    const parsed = JSON.parse(decoded) as Record<string, unknown>;
+                    const metadata = (parsed.metadata as Record<string, unknown>) || {};
+                    const signer = (metadata.signer as string) ?? (parsed.reviewer as string);
+                    if (signer !== agentAccountId) continue;
+
+                    const scheduleId = (parsed.t_id as string) ?? (metadata.schedule_id as string) ?? (parsed.scheduleId as string);
+                    if (scheduleId && /^0\.0\.\d+$/.test(String(scheduleId))) {
+                        rejected.add(String(scheduleId));
+                    }
+                } catch {
+                    continue;
+                }
+            }
+
+            if (rejected.size > 0) {
+                console.log(`[FETCH_PENDING_TX] Filtering ${rejected.size} schedule(s) already rejected by this agent:`, [...rejected]);
+            }
+            return rejected;
+        } catch (err) {
+            console.warn('[FETCH_PENDING_TX] Could not fetch rejection topic:', err);
+            return new Set();
+        }
+    }
+
     async _call(input: z.infer<typeof this.schema>): Promise<string> {
         const { projectOperatorAccountId } = input;
 
@@ -36,6 +80,8 @@ export class FetchPendingTransactionsTool extends StructuredTool {
             if (!agentPublicKey) {
                 throw new Error('OPERATOR_PUBLIC_KEY environment variable not set');
             }
+
+            const rejectedScheduleIds = await this.getRejectedScheduleIds(mirrorNodeUrl);
             
             console.log(`[FETCH_PENDING_TX] Querying schedules from operator: ${projectOperatorAccountId}`);
             console.log(`[FETCH_PENDING_TX] Agent public key: ${agentPublicKey.slice(0, 20)}...`);
@@ -186,6 +232,10 @@ export class FetchPendingTransactionsTool extends StructuredTool {
                     }
 
                     if (requiresMySignature) {
+                        if (rejectedScheduleIds.has(schedule.schedule_id)) {
+                            console.log(`[FETCH_PENDING_TX] Skipping schedule already rejected by this agent: ${schedule.schedule_id}`);
+                            continue;
+                        }
                         allPendingSchedules.push(schedule);
                     }
 
