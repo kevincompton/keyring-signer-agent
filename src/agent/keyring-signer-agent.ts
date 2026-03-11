@@ -1,5 +1,5 @@
 import { config } from 'dotenv';
-import { Client, TopicMessageQuery } from '@hashgraph/sdk';
+import { Client, TopicMessageQuery, TopicMessageSubmitTransaction, TopicId } from '@hashgraph/sdk';
 import { EnvironmentConfig } from './agent-config.js';
 import { HederaLangchainToolkit, AgentMode, coreAccountPlugin, coreConsensusPlugin, coreConsensusQueryPlugin } from 'hedera-agent-kit';
 import { createAgent } from 'langchain';
@@ -41,6 +41,7 @@ export class KeyringSignerAgent {
     private hederaAgentToolkit?: HederaLangchainToolkit;
     private agent?: ReturnType<typeof createAgent>;
     private client?: Client;
+    private signTransactionTool?: SignTransactionTool;
 
     // State for pending transactions
     private pendingScheduleIds: string[] = [];
@@ -184,9 +185,6 @@ LOW RISK - LIKELY SAFE TO SIGN (all known VaultLPManager functions when threshol
 setAdmin(address newAdmin): When memo indicates admin action (e.g. "Lynx: setAdmin 0.0.xxxxx on 0.0.yyyyy") and threshold is payer, treat as LOW RISK. REJECT only if newAdmin is zero address (0x0000000000000000000000000000000000000000).
 
 When contractHint is "VaultLPManager" or "DepositMinterV2/VaultLPManager", treat as LOW RISK unless parameters look suspicious (e.g. zero address for setVault or setAdmin). Note: tickLower and tickUpper (int24) can be negative — that is normal for concentrated liquidity, not a red flag.
-${process.env.KEYRING_OPERATOR_ACCOUNT_ID ? `
-
-KEYRING OPERATOR EXCEPTION: Transactions created by the KeyRing operator (creatorAccountId ${process.env.KEYRING_OPERATOR_ACCOUNT_ID}) are allowed actions from the project dashboard. These include admin changes such as setAdmin to a new threshold list created in the keyring dash. When creatorAccountId is ${process.env.KEYRING_OPERATOR_ACCOUNT_ID}, treat as LOW RISK provided newAdmin/parameters are not zero or obviously invalid. Sign these transactions when they represent legitimate dashboard operations.` : ''}
 
 WORKFLOW:
 - Use your scratchpad to remember information across steps (operator IDs, pending transactions, contract details)
@@ -217,10 +215,10 @@ You are account ${this.env.HEDERA_ACCOUNT_ID} operating on ${this.env.HEDERA_NET
                 (t: { name?: string }) => t.name !== 'schedule_delete_tool'
             );
             const fetchPendingTransactionsTool = new FetchPendingTransactionsTool(this.client);
-            const signTransactionTool = new SignTransactionTool(this.client);
+            this.signTransactionTool = new SignTransactionTool(this.client);
             const queryRegistryTool = new QueryRegistryTopicTool(this.env.HEDERA_NETWORK || 'testnet');
             const getScheduleInfoTool = new GetScheduleInfoTool(this.client);
-            const allTools = [...hederaTools, fetchPendingTransactionsTool, signTransactionTool, queryRegistryTool, getScheduleInfoTool];
+            const allTools = [...hederaTools, fetchPendingTransactionsTool, this.signTransactionTool, queryRegistryTool, getScheduleInfoTool];
 
             this.agent = createAgent({
                 model: llm,
@@ -257,13 +255,22 @@ You are account ${this.env.HEDERA_ACCOUNT_ID} operating on ${this.env.HEDERA_NET
             await this.loadContractDetails();
             await this.runCheck();
 
-            const inboundTopicId = this.env.PROJECT_VALIDATOR_INBOUND_TOPIC;
-            if (inboundTopicId && inboundTopicId !== '0.0.0' && this.client) {
-                console.log(`\n📥 Subscribing to validator inbound topic: ${inboundTopicId}`);
+            const validatorInboundTopicId = this.env.PROJECT_VALIDATOR_INBOUND_TOPIC;
+            if (validatorInboundTopicId && validatorInboundTopicId !== '0.0.0' && this.client) {
+                console.log(`\n📥 Subscribing to validator inbound topic: ${validatorInboundTopicId}`);
                 console.log('   (Message received = trigger check)\n');
-                this.subscribeToValidatorInbound(inboundTopicId);
-            } else {
-                console.log('\n✅ Initial check complete. No validator inbound topic configured for subscription.');
+                this.subscribeToValidatorInbound(validatorInboundTopicId);
+            }
+
+            const operatorInboundTopicId = this.env.PROJECT_OPERATOR_INBOUND_TOPIC;
+            if (operatorInboundTopicId && operatorInboundTopicId !== '0.0.0' && this.client) {
+                console.log(`\n📥 Subscribing to operator inbound topic: ${operatorInboundTopicId}`);
+                console.log('   (KeyRing operator sends schedule IDs to sign)\n');
+                this.subscribeToOperatorInbound(operatorInboundTopicId);
+            }
+
+            if (!validatorInboundTopicId && !operatorInboundTopicId) {
+                console.log('\n✅ Initial check complete. No inbound topics configured for subscription.');
             }
         } catch (error) {
             console.error("❌ Error starting keyring signer agent:", error);
@@ -310,6 +317,73 @@ You are account ${this.env.HEDERA_ACCOUNT_ID} operating on ${this.env.HEDERA_NET
                     console.error('❌ Error running check from inbound trigger:', err);
                 });
             });
+    }
+
+    /** Subscribe to operator inbound topic. KeyRing operator sends schedule IDs to sign (trusted, no validation). */
+    private subscribeToOperatorInbound(topicId: string): void {
+        if (!this.client || !this.signTransactionTool) {
+            throw new Error('Client or signTransactionTool not initialized');
+        }
+        new TopicMessageQuery()
+            .setTopicId(topicId)
+            .subscribe(this.client, (msg, err) => {
+                if (err) {
+                    console.error('❌ Operator inbound subscription error:', err);
+                }
+            }, (message) => {
+                const messageAsString = new TextDecoder().decode(message.contents);
+                console.log(
+                    `\n📥 ${message.consensusTimestamp.toDate().toISOString()} Operator inbound message received: ${messageAsString}`
+                );
+                this.handleOperatorInboundMessage(messageAsString).catch((err) => {
+                    console.error('❌ Error handling operator inbound message:', err);
+                });
+            });
+    }
+
+    /** Parse schedule IDs from message, sign each, notify passive agents. */
+    private async handleOperatorInboundMessage(message: string): Promise<void> {
+        const scheduleIdPattern = /0\.0\.\d+/g;
+        const scheduleIds = [...new Set(message.match(scheduleIdPattern) ?? [])];
+        if (scheduleIds.length === 0) {
+            console.log('[OPERATOR_INBOUND] No schedule IDs found in message');
+            return;
+        }
+        console.log(`[OPERATOR_INBOUND] Signing ${scheduleIds.length} schedule(s) from KeyRing operator:`, scheduleIds);
+        for (const scheduleId of scheduleIds) {
+            try {
+                const result = await this.signTransactionTool!._call({ scheduleId });
+                const parsed = JSON.parse(result) as { success?: boolean; error?: string };
+                if (parsed.success) {
+                    console.log(`[OPERATOR_INBOUND] Signed ${scheduleId}`);
+                    await this.notifyPassiveAgents(scheduleId);
+                } else {
+                    console.log(`[OPERATOR_INBOUND] Could not sign ${scheduleId}: ${parsed.error ?? result}`);
+                }
+            } catch (err) {
+                console.error(`[OPERATOR_INBOUND] Error signing ${scheduleId}:`, err);
+            }
+            await new Promise((r) => setTimeout(r, 1000)); // Rate limit
+        }
+    }
+
+    /** Post schedule ID to passive agent inbound topics. */
+    private async notifyPassiveAgents(scheduleId: string): Promise<void> {
+        const passiveTopics = process.env.PASSIVE_AGENT_INBOUND_TOPICS?.split(',').map((t) => t.trim()).filter(Boolean) ?? [];
+        if (passiveTopics.length === 0) return;
+        if (!this.client) return;
+        for (const topicIdStr of passiveTopics) {
+            try {
+                const tx = await new TopicMessageSubmitTransaction()
+                    .setTopicId(TopicId.fromString(topicIdStr))
+                    .setMessage(scheduleId)
+                    .execute(this.client);
+                await tx.getReceipt(this.client);
+                console.log(`[OPERATOR_INBOUND] Notified passive agent topic ${topicIdStr}`);
+            } catch (err) {
+                console.error(`[OPERATOR_INBOUND] Failed to notify ${topicIdStr}:`, err);
+            }
+        }
     }
 
     async stop(): Promise<void> {
@@ -467,15 +541,6 @@ Return ONLY a JSON array of schedule IDs.` }],
         try {
             console.log(`🔍 Reviewing transaction: ${scheduleId}`);
 
-            const keyringOperatorId = process.env.KEYRING_OPERATOR_ACCOUNT_ID;
-            const passiveTopics = process.env.PASSIVE_AGENT_INBOUND_TOPICS?.split(',').map((t) => t.trim()).filter(Boolean) ?? [];
-            const passiveTopicsStep =
-                keyringOperatorId && passiveTopics.length > 0
-                    ? `STEP 5: If you SIGNED the transaction AND creatorAccountId from get_schedule_info is ${keyringOperatorId} (KeyRing operator):
-- Use SUBMIT_TOPIC_MESSAGE_TOOL to post the schedule ID "${scheduleId}" as the message content to EACH of these passive agent inbound topics: ${passiveTopics.join(', ')}
-- This notifies the passive agents to process the signed schedule.`
-                    : '';
-
             const result = await this.agent?.invoke({
                 messages: [{ role: "human", content: `Review scheduled transaction ${scheduleId}:
 
@@ -508,8 +573,6 @@ STEP 4: Take action based on risk
   * Post rejection to topic ${this.env.PROJECT_REJECTION_TOPIC}. Include schedule_id and signer (${this.env.HEDERA_ACCOUNT_ID}) in the message so this agent can filter them on future fetches.
   * DO NOT sign the transaction
   * Report that transaction was rejected
-
-${passiveTopicsStep}
 
 Report the final action taken (signed or rejected) and why.` }],
             }, { configurable: { thread_id: "keyring-signer" } });

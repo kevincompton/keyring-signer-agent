@@ -24,6 +24,18 @@ export class FetchPendingTransactionsTool extends StructuredTool {
         super();
     }
 
+    /** Get allowed threshold account IDs from THRESHOLD_ACCOUNT_ID (comma-separated). Empty = no filter. */
+    private getAllowedThresholdAccountIds(): Set<string> {
+        const raw = process.env.THRESHOLD_ACCOUNT_ID;
+        if (!raw?.trim()) return new Set();
+        return new Set(
+            raw
+                .split(',')
+                .map((s) => s.trim())
+                .filter((s) => /^0\.0\.\d+$/.test(s))
+        );
+    }
+
     /** Fetch schedule IDs this agent has rejected from the HCS-2 indexed rejection topic. */
     private async getRejectedScheduleIds(mirrorNodeUrl: string): Promise<Set<string>> {
         const rejectionTopicId = process.env.PROJECT_REJECTION_TOPIC;
@@ -83,44 +95,21 @@ export class FetchPendingTransactionsTool extends StructuredTool {
 
             const rejectedScheduleIds = await this.getRejectedScheduleIds(mirrorNodeUrl);
             
-            // Build list of creator accounts to query: project operator + KeyRing operator (dashboard)
-            const creatorAccountIds: string[] = [projectOperatorAccountId];
-            const keyringOperatorId = process.env.KEYRING_OPERATOR_ACCOUNT_ID;
-            if (keyringOperatorId && keyringOperatorId !== '0.0.0' && !creatorAccountIds.includes(keyringOperatorId)) {
-                creatorAccountIds.push(keyringOperatorId);
-                console.log(`[FETCH_PENDING_TX] Including KeyRing operator schedules: ${keyringOperatorId}`);
-            }
-            
-            console.log(`[FETCH_PENDING_TX] Querying schedules from operators: ${creatorAccountIds.join(', ')}`);
+            console.log(`[FETCH_PENDING_TX] Querying schedules from operator: ${projectOperatorAccountId}`);
             console.log(`[FETCH_PENDING_TX] Agent public key: ${agentPublicKey.slice(0, 20)}...`);
 
-            // Query schedules from each creator account (project operator + KeyRing operator)
-            const allSchedulesFromCreators: PendingSchedule[] = [];
-            const seenScheduleIds = new Set<string>();
+            // Query schedules from the project operator only (KeyRing operator sends schedule IDs via operator inbound topic)
+            const response = await fetch(
+                `${mirrorNodeUrl}/api/v1/schedules?account.id=${projectOperatorAccountId}&order=desc&limit=50`
+            );
 
-            for (const creatorId of creatorAccountIds) {
-                const response = await fetch(
-                    `${mirrorNodeUrl}/api/v1/schedules?account.id=${creatorId}&order=desc&limit=50`
-                );
-
-                if (!response.ok) {
-                    console.warn(`[FETCH_PENDING_TX] Mirror node request failed for ${creatorId}: ${response.status}`);
-                    continue;
-                }
-
-                const data = await response.json();
-                const schedules: PendingSchedule[] = data.schedules || [];
-                for (const s of schedules) {
-                    if (!seenScheduleIds.has(s.schedule_id)) {
-                        seenScheduleIds.add(s.schedule_id);
-                        allSchedulesFromCreators.push(s);
-                    }
-                }
-                console.log(`[FETCH_PENDING_TX] Found ${schedules.length} schedules from ${creatorId}`);
+            if (!response.ok) {
+                throw new Error(`Mirror node request failed: ${response.status} ${response.statusText}`);
             }
 
-            const schedules = allSchedulesFromCreators;
-            console.log(`[FETCH_PENDING_TX] Total ${schedules.length} unique schedules from all operators`);
+            const data = await response.json();
+            const schedules: PendingSchedule[] = data.schedules || [];
+            console.log(`[FETCH_PENDING_TX] Found ${schedules.length} schedules from ${projectOperatorAccountId}`);
 
             const allPendingSchedules: PendingSchedule[] = [];
 
@@ -191,6 +180,7 @@ export class FetchPendingTransactionsTool extends StructuredTool {
 
                     // For each account in the transaction, check if it's a threshold list containing my key
                     let requiresMySignature = false;
+                    let thresholdAccountRequiringSignature: string | null = null;
 
                     for (const acctId of accountsInTx) {
                         // Fetch account to check if it has a KeyList
@@ -242,7 +232,8 @@ export class FetchPendingTransactionsTool extends StructuredTool {
                                             }
                                         }
                                         requiresMySignature = true;
-                                        console.log(`[FETCH_PENDING_TX] Schedule requires my signature: ${schedule.schedule_id}`);
+                                        thresholdAccountRequiringSignature = acctId;
+                                        console.log(`[FETCH_PENDING_TX] Schedule requires my signature: ${schedule.schedule_id} (threshold: ${acctId})`);
                                         break;
                                     } else {
                                         console.log(`[FETCH_PENDING_TX] Already signed schedule: ${schedule.schedule_id}`);
@@ -258,6 +249,14 @@ export class FetchPendingTransactionsTool extends StructuredTool {
                         if (rejectedScheduleIds.has(schedule.schedule_id)) {
                             console.log(`[FETCH_PENDING_TX] Skipping schedule already rejected by this agent: ${schedule.schedule_id}`);
                             continue;
+                        }
+                        // Only sign for project's threshold account(s) - filter out other projects
+                        const allowedThresholds = this.getAllowedThresholdAccountIds();
+                        if (allowedThresholds.size > 0 && thresholdAccountRequiringSignature) {
+                            if (!allowedThresholds.has(thresholdAccountRequiringSignature)) {
+                                console.log(`[FETCH_PENDING_TX] Skipping schedule ${schedule.schedule_id}: threshold ${thresholdAccountRequiringSignature} not in allowed list (${[...allowedThresholds].join(', ')})`);
+                                continue;
+                            }
                         }
                         allPendingSchedules.push(schedule);
                     }
