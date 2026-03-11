@@ -13,4 +13,8 @@ export interface EnvironmentConfig {
     PROJECT_VALIDATOR_TOPIC?: string;
     PROJECT_VALIDATOR_INBOUND_TOPIC?: string;
     LYNX_REGISTRATION_TX?: string;
+    /** KeyRing operator account (project dashboard) - transactions from this account are trusted for allowed actions (e.g. setAdmin to new threshold list) */
+    KEYRING_OPERATOR_ACCOUNT_ID?: string;
+    /** Comma-separated inbound topic IDs for passive agents - after signing KeyRing operator tx, post schedule ID to each */
+    PASSIVE_AGENT_INBOUND_TOPICS?: string;
 }

@@ -83,21 +83,44 @@ export class FetchPendingTransactionsTool extends StructuredTool {
 
             const rejectedScheduleIds = await this.getRejectedScheduleIds(mirrorNodeUrl);
             
-            console.log(`[FETCH_PENDING_TX] Querying schedules from operator: ${projectOperatorAccountId}`);
+            // Build list of creator accounts to query: project operator + KeyRing operator (dashboard)
+            const creatorAccountIds: string[] = [projectOperatorAccountId];
+            const keyringOperatorId = process.env.KEYRING_OPERATOR_ACCOUNT_ID;
+            if (keyringOperatorId && keyringOperatorId !== '0.0.0' && !creatorAccountIds.includes(keyringOperatorId)) {
+                creatorAccountIds.push(keyringOperatorId);
+                console.log(`[FETCH_PENDING_TX] Including KeyRing operator schedules: ${keyringOperatorId}`);
+            }
+            
+            console.log(`[FETCH_PENDING_TX] Querying schedules from operators: ${creatorAccountIds.join(', ')}`);
             console.log(`[FETCH_PENDING_TX] Agent public key: ${agentPublicKey.slice(0, 20)}...`);
 
-            // Query schedules from the project operator
-            const response = await fetch(
-                `${mirrorNodeUrl}/api/v1/schedules?account.id=${projectOperatorAccountId}&order=desc&limit=50`
-            );
+            // Query schedules from each creator account (project operator + KeyRing operator)
+            const allSchedulesFromCreators: PendingSchedule[] = [];
+            const seenScheduleIds = new Set<string>();
 
-            if (!response.ok) {
-                throw new Error(`Mirror node request failed: ${response.status} ${response.statusText}`);
+            for (const creatorId of creatorAccountIds) {
+                const response = await fetch(
+                    `${mirrorNodeUrl}/api/v1/schedules?account.id=${creatorId}&order=desc&limit=50`
+                );
+
+                if (!response.ok) {
+                    console.warn(`[FETCH_PENDING_TX] Mirror node request failed for ${creatorId}: ${response.status}`);
+                    continue;
+                }
+
+                const data = await response.json();
+                const schedules: PendingSchedule[] = data.schedules || [];
+                for (const s of schedules) {
+                    if (!seenScheduleIds.has(s.schedule_id)) {
+                        seenScheduleIds.add(s.schedule_id);
+                        allSchedulesFromCreators.push(s);
+                    }
+                }
+                console.log(`[FETCH_PENDING_TX] Found ${schedules.length} schedules from ${creatorId}`);
             }
 
-            const data = await response.json();
-            const schedules: PendingSchedule[] = data.schedules || [];
-            console.log(`[FETCH_PENDING_TX] Found ${schedules.length} schedules from ${projectOperatorAccountId}`);
+            const schedules = allSchedulesFromCreators;
+            console.log(`[FETCH_PENDING_TX] Total ${schedules.length} unique schedules from all operators`);
 
             const allPendingSchedules: PendingSchedule[] = [];
 

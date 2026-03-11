@@ -184,6 +184,9 @@ LOW RISK - LIKELY SAFE TO SIGN (all known VaultLPManager functions when threshol
 setAdmin(address newAdmin): When memo indicates admin action (e.g. "Lynx: setAdmin 0.0.xxxxx on 0.0.yyyyy") and threshold is payer, treat as LOW RISK. REJECT only if newAdmin is zero address (0x0000000000000000000000000000000000000000).
 
 When contractHint is "VaultLPManager" or "DepositMinterV2/VaultLPManager", treat as LOW RISK unless parameters look suspicious (e.g. zero address for setVault or setAdmin). Note: tickLower and tickUpper (int24) can be negative — that is normal for concentrated liquidity, not a red flag.
+${process.env.KEYRING_OPERATOR_ACCOUNT_ID ? `
+
+KEYRING OPERATOR EXCEPTION: Transactions created by the KeyRing operator (creatorAccountId ${process.env.KEYRING_OPERATOR_ACCOUNT_ID}) are allowed actions from the project dashboard. These include admin changes such as setAdmin to a new threshold list created in the keyring dash. When creatorAccountId is ${process.env.KEYRING_OPERATOR_ACCOUNT_ID}, treat as LOW RISK provided newAdmin/parameters are not zero or obviously invalid. Sign these transactions when they represent legitimate dashboard operations.` : ''}
 
 WORKFLOW:
 - Use your scratchpad to remember information across steps (operator IDs, pending transactions, contract details)
@@ -463,7 +466,16 @@ Return ONLY a JSON array of schedule IDs.` }],
     private async reviewPendingTransaction(scheduleId: string): Promise<void> {
         try {
             console.log(`🔍 Reviewing transaction: ${scheduleId}`);
-            
+
+            const keyringOperatorId = process.env.KEYRING_OPERATOR_ACCOUNT_ID;
+            const passiveTopics = process.env.PASSIVE_AGENT_INBOUND_TOPICS?.split(',').map((t) => t.trim()).filter(Boolean) ?? [];
+            const passiveTopicsStep =
+                keyringOperatorId && passiveTopics.length > 0
+                    ? `STEP 5: If you SIGNED the transaction AND creatorAccountId from get_schedule_info is ${keyringOperatorId} (KeyRing operator):
+- Use SUBMIT_TOPIC_MESSAGE_TOOL to post the schedule ID "${scheduleId}" as the message content to EACH of these passive agent inbound topics: ${passiveTopics.join(', ')}
+- This notifies the passive agents to process the signed schedule.`
+                    : '';
+
             const result = await this.agent?.invoke({
                 messages: [{ role: "human", content: `Review scheduled transaction ${scheduleId}:
 
@@ -496,6 +508,8 @@ STEP 4: Take action based on risk
   * Post rejection to topic ${this.env.PROJECT_REJECTION_TOPIC}. Include schedule_id and signer (${this.env.HEDERA_ACCOUNT_ID}) in the message so this agent can filter them on future fetches.
   * DO NOT sign the transaction
   * Report that transaction was rejected
+
+${passiveTopicsStep}
 
 Report the final action taken (signed or rejected) and why.` }],
             }, { configurable: { thread_id: "keyring-signer" } });
