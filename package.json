@@ -35,6 +35,7 @@
     "express": "^4.18.2",
     "hedera-agent-kit": "^3.8.0",
     "langchain": "^1.2.24",
+    "viem": "^2.47.4",
     "zod": "^3.22.0"
   },
   "devDependencies": {

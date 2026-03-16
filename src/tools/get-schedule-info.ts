@@ -56,6 +56,7 @@ export class GetScheduleInfoTool extends StructuredTool {
             const contractCallDetails = this.decodeContractCall(scheduleData);
 
             // Extract key information
+            const expirationTime = scheduleData.expiration_time || null;
             const info = {
                 scheduleId: scheduleData.schedule_id,
                 creatorAccountId: scheduleData.creator_account_id,
@@ -68,6 +69,11 @@ export class GetScheduleInfoTool extends StructuredTool {
                 signaturesRequired: scheduleData.signatures?.length || 0,
                 transactionType: scheduleData.transaction_body ? this.detectTransactionType(scheduleData.transaction_body) : 'Unknown',
                 contractCall: contractCallDetails,
+                expirationTime,
+                ...(expirationTime && {
+                    secondsUntilExpiry: Math.floor((new Date(expirationTime).getTime() - Date.now()) / 1000),
+                    secondsUntilOneHourBeforeExpiry: Math.max(0, Math.floor((new Date(expirationTime).getTime() - Date.now()) / 1000) - 3600),
+                }),
             };
 
             return JSON.stringify({
@@ -77,7 +83,8 @@ export class GetScheduleInfoTool extends StructuredTool {
                     memo: scheduleData.memo,
                     executed_timestamp: scheduleData.executed_timestamp,
                     deleted: scheduleData.deleted,
-                    signatures: scheduleData.signatures
+                    signatures: scheduleData.signatures,
+                    expiration_time: expirationTime
                 }
             }, null, 2);
 

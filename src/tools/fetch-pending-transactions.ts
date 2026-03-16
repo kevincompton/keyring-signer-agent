@@ -126,6 +126,13 @@ export class FetchPendingTransactionsTool extends StructuredTool {
                         console.log(`[FETCH_PENDING_TX] Skipping expired schedule: ${schedule.schedule_id}`);
                         continue;
                     }
+                    // Enforce 48-hour minimum from creation: schedule must have at least 48h until expiry
+                    const msUntilExpiry = exp.getTime() - now.getTime();
+                    const FORTY_EIGHT_HOURS_MS = 48 * 60 * 60 * 1000;
+                    if (msUntilExpiry < FORTY_EIGHT_HOURS_MS) {
+                        console.log(`[FETCH_PENDING_TX] Skipping schedule ${schedule.schedule_id}: expires in < 48 hours (${Math.round(msUntilExpiry / 3600000)}h remaining)`);
+                        continue;
+                    }
                 }
 
                 // Decode transaction body to find involved accounts

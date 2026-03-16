@@ -11,6 +11,7 @@ import { FetchPendingTransactionsTool } from '../tools/fetch-pending-transaction
 import { SignTransactionTool } from '../tools/sign-transaction.js';
 import { QueryRegistryTopicTool } from '../tools/query-registry-topic.js';
 import { GetScheduleInfoTool } from '../tools/get-schedule-info.js';
+import { SchedulePassiveAgentsTool } from '../tools/schedule-passive-agents.js';
 
 // Load environment variables
 config();
@@ -142,15 +143,16 @@ SECURITY PRINCIPLES:
 VALIDATION RULES FOR DEPOSITMINTER CONTRACT:
 
 CRITICAL RISK - MUST REJECT:
-1. updateRatios/adminUpdateRatios with invalid parameters:
+1. SCHEDULE EXPIRY: Schedules with less than 48 hours until expiry (check schedule.secondsUntilExpiry from get_schedule_info — must be >= 172800). This ensures signers have enough time. NOTE: This rule does NOT apply to schedules from the operator inbound topic (those are trusted and signed directly).
+2. updateRatios/adminUpdateRatios with invalid parameters:
    - ANY ratio value < 1 or > 100 (violates MIN_RATIO/MAX_RATIO constraints)
    - Extremely imbalanced ratios (e.g., hbarRatio > 95 or any single asset > 95%)
    - All ratios set to maximum (100) - economic attack vector
-2. setGovernanceAddress:
+3. setGovernanceAddress:
    - Setting to zero address (0x0000000000000000000000000000000000000000)
    - Setting to unexpected/unknown addresses without governance approval
-3. Unknown or unexpected function calls not in the DepositMinterV2 or VaultLPManager ABI
-4. Calls to admin-only functions from non-admin addresses
+4. Unknown or unexpected function calls not in the DepositMinterV2 or VaultLPManager ABI
+5. Calls to admin-only functions from non-admin addresses
 
 HIGH RISK - INVESTIGATE CAREFULLY:
 1. mintWithDeposits with insufficient deposits:
@@ -189,13 +191,14 @@ When contractHint is "VaultLPManager" or "DepositMinterV2/VaultLPManager", treat
 WORKFLOW:
 - Use your scratchpad to remember information across steps (operator IDs, pending transactions, contract details)
 - Process transactions systematically and thoroughly
-- For EACH transaction:
-  1. Get full details including decoded function name and parameters
-  2. Analyze against the validation rules above
-  3. Determine risk level (low/medium/high/critical)
-  4. Post validation message to validator topic
-  5. If high/critical: Post rejection to rejection topic and DO NOT SIGN
-  6. If low/medium: Sign the transaction
+- For EACH transaction (from fetch_pending_transactions — NOT from operator topic):
+  1. Get full details via get_schedule_info (includes expirationTime, secondsUntilExpiry, secondsUntilOneHourBeforeExpiry)
+  2. MUST REJECT if secondsUntilExpiry < 172800 (48 hours) — signers need time
+  3. Analyze against the validation rules above
+  4. Determine risk level (low/medium/high/critical)
+  5. Post validation message to validator topic
+  6. If high/critical: Post rejection to rejection topic and DO NOT SIGN
+  7. If low/medium: Sign the transaction, then IMMEDIATELY call schedule_passive_agents with scheduleId and durationSeconds = schedule.secondsUntilOneHourBeforeExpiry (schedules review to execute 1 hour before expiry)
 - Maintain detailed logs of all decisions
 - Format rejection messages in HCS2 JSON standard
 
@@ -204,6 +207,7 @@ TOOLS AT YOUR DISPOSAL:
 - fetch_pending_transactions: Query pending scheduled transactions
 - get_schedule_info: Get decoded transaction details including function name and parameters
 - sign_transaction: Sign approved transactions
+- schedule_passive_agents: After signing an approved schedule (from pending transactions), call this to schedule passive agents — use scheduleId and durationSeconds = secondsUntilOneHourBeforeExpiry from get_schedule_info (executes 1 hour before expiry)
 - SUBMIT_TOPIC_MESSAGE_TOOL: Post validation/rejection messages to HCS topics
 
 IMPORTANT: Hedera scheduled transactions are immutable — they cannot be deleted. Do not attempt to delete schedules. For invalid or unwanted schedules, post a rejection and do not sign; the schedule will expire if not executed.
@@ -218,7 +222,8 @@ You are account ${this.env.HEDERA_ACCOUNT_ID} operating on ${this.env.HEDERA_NET
             this.signTransactionTool = new SignTransactionTool(this.client);
             const queryRegistryTool = new QueryRegistryTopicTool(this.env.HEDERA_NETWORK || 'testnet');
             const getScheduleInfoTool = new GetScheduleInfoTool(this.client);
-            const allTools = [...hederaTools, fetchPendingTransactionsTool, this.signTransactionTool, queryRegistryTool, getScheduleInfoTool];
+            const schedulePassiveAgentsTool = new SchedulePassiveAgentsTool();
+            const allTools = [...hederaTools, fetchPendingTransactionsTool, this.signTransactionTool, queryRegistryTool, getScheduleInfoTool, schedulePassiveAgentsTool];
 
             this.agent = createAgent({
                 model: llm,
@@ -262,7 +267,7 @@ You are account ${this.env.HEDERA_ACCOUNT_ID} operating on ${this.env.HEDERA_NET
                 this.subscribeToValidatorInbound(validatorInboundTopicId);
             }
 
-            const operatorInboundTopicId = this.env.PROJECT_OPERATOR_INBOUND_TOPIC;
+            const operatorInboundTopicId = this.env.KEYRING_OPERATOR_INBOUND_TOPIC_ID;
             if (operatorInboundTopicId && operatorInboundTopicId !== '0.0.0' && this.client) {
                 console.log(`\n📥 Subscribing to operator inbound topic: ${operatorInboundTopicId}`);
                 console.log('   (KeyRing operator sends schedule IDs to sign)\n');
@@ -546,16 +551,20 @@ Return ONLY a JSON array of schedule IDs.` }],
 
 STEP 1: Get full transaction details
 - Use get_schedule_info tool to get details for scheduleId="${scheduleId}"
-- This will return the decoded function name and all parameters
+- This returns decoded function name, parameters, expirationTime, secondsUntilExpiry, and secondsUntilOneHourBeforeExpiry
 
-STEP 2: Analyze the transaction
+STEP 2: Check 48-hour expiry rule (MUST REJECT if violated)
+- If schedule.secondsUntilExpiry < 172800 (48 hours): Post rejection to ${this.env.PROJECT_REJECTION_TOPIC} with reason "Schedule expires in less than 48 hours — signers need adequate time". DO NOT sign.
+- If no expirationTime or secondsUntilExpiry: treat as invalid, reject.
+
+STEP 3: Analyze the transaction
 - Check the function name and parameters against the validation rules in your system prompt
 - If contractHint is "VaultLPManager": use VaultLPManager rules (createLPPosition, closeLPPosition, etc. are LOW RISK)
 - If DepositMinterV2: compare parameters to DepositMinterV2 constraints (ratios, deposits)
 - Identify any red flags (invalid ratios, zero addresses, insufficient deposits, admin functions, etc.)
 - Determine risk level: low, medium, high, or critical
 
-STEP 3: Post validation message
+STEP 4: Post validation message
 - Always post to topic ${this.env.PROJECT_VALIDATOR_TOPIC} with:
    {
      "scheduleId": "${scheduleId}",
@@ -567,8 +576,10 @@ STEP 3: Post validation message
      "projectRegistrationTxId": "${this.env.LYNX_REGISTRATION_TX}"
    }
 
-STEP 4: Take action based on risk
-- If LOW or MEDIUM risk: Use sign_transaction tool with scheduleId="${scheduleId}"
+STEP 5: Take action based on risk
+- If LOW or MEDIUM risk: 
+  1. Use sign_transaction tool with scheduleId="${scheduleId}"
+  2. IMMEDIATELY after successful sign: if schedule.secondsUntilOneHourBeforeExpiry > 0, call schedule_passive_agents with scheduleId="${scheduleId}" and durationSeconds = schedule.secondsUntilOneHourBeforeExpiry. This schedules the review to execute 1 hour before expiry.
 - If HIGH or CRITICAL risk:
   * Post rejection to topic ${this.env.PROJECT_REJECTION_TOPIC}. Include schedule_id and signer (${this.env.HEDERA_ACCOUNT_ID}) in the message so this agent can filter them on future fetches.
   * DO NOT sign the transaction

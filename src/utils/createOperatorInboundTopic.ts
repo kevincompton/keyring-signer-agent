@@ -46,7 +46,7 @@ async function getOrCreateOperatorInboundTopic(
     keyringOperatorId: AccountId,
     keyringOperatorPublicKey: PublicKey
 ): Promise<string> {
-    const existingTopicId = process.env.PROJECT_OPERATOR_INBOUND_TOPIC;
+    const existingTopicId = process.env.KEYRING_OPERATOR_INBOUND_TOPIC_ID;
 
     if (existingTopicId && existingTopicId !== '0.0.0') {
         try {
@@ -83,7 +83,7 @@ async function getOrCreateOperatorInboundTopic(
     const newTopicId = createReceipt.topicId!.toString();
 
     console.log(`✅ Created new ${network} operator inbound topic with ID:`, newTopicId);
-    console.log(`\n📋 Add this to your .env file:\nPROJECT_OPERATOR_INBOUND_TOPIC=${newTopicId}\n`);
+    console.log(`\n📋 Add this to your .env file:\nKEYRING_OPERATOR_INBOUND_TOPIC_ID=${newTopicId}\n`);
     return newTopicId;
 }
 
