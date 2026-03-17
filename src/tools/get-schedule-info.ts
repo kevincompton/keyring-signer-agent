@@ -100,13 +100,11 @@ export class GetScheduleInfoTool extends StructuredTool {
     }
 
     private getMirrorNodeUrl(): string {
-        const network = this.client.ledgerId?.toString() || 'testnet';
-        
-        if (network === 'mainnet') {
-            return 'https://mainnet.mirrornode.hedera.com';
-        }
-        
-        return 'https://testnet.mirrornode.hedera.com';
+        const fromClient = this.client.ledgerId?.toString()?.toLowerCase();
+        const network = fromClient === 'mainnet' || fromClient === 'testnet'
+            ? fromClient
+            : (process.env.HEDERA_NETWORK || 'testnet').toLowerCase();
+        return network === 'mainnet' ? 'https://mainnet.mirrornode.hedera.com' : 'https://testnet.mirrornode.hedera.com';
     }
 
     private detectTransactionType(transactionBody: string): string {

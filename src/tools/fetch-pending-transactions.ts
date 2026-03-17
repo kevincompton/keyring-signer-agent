@@ -296,13 +296,10 @@ export class FetchPendingTransactionsTool extends StructuredTool {
     }
 
     private getMirrorNodeUrl(): string {
-        // Get the mirror node URL from the client's mirror network
-        const network = this.client.ledgerId?.toString() || 'testnet';
-        
-        if (network === 'mainnet') {
-            return 'https://mainnet.mirrornode.hedera.com';
-        }
-        
-        return 'https://testnet.mirrornode.hedera.com';
+        const fromClient = this.client.ledgerId?.toString()?.toLowerCase();
+        const network = fromClient === 'mainnet' || fromClient === 'testnet'
+            ? fromClient
+            : (process.env.HEDERA_NETWORK || 'testnet').toLowerCase();
+        return network === 'mainnet' ? 'https://mainnet.mirrornode.hedera.com' : 'https://testnet.mirrornode.hedera.com';
     }
 }

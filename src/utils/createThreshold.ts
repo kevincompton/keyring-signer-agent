@@ -131,7 +131,7 @@ async function createThresholdKeyList(options: CreateThresholdOptions): Promise<
         });
       }
       
-      console.log("\n🎉 KeyList created successfully on Hedera testnet!");
+      console.log(`\n🎉 KeyList created successfully on Hedera ${NETWORK}!`);
       
     } catch (error) {
       console.error("❌ Error creating KeyList:", error);

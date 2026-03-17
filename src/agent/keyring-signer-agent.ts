@@ -96,8 +96,9 @@ export class KeyringSignerAgent {
         console.log("🔧 Initializing blockchain tools for keyring signer agent...");
       
         try {
-            // Initialize Hedera Client (following tool-calling-balance-check pattern)
-            this.client = Client.forTestnet();
+            // Initialize Hedera Client based on HEDERA_NETWORK
+            const network = this.env.HEDERA_NETWORK || 'testnet';
+            this.client = network === 'mainnet' ? Client.forMainnet() : Client.forTestnet();
             this.client.setOperator(this.env.HEDERA_ACCOUNT_ID!, this.env.HEDERA_PRIVATE_KEY!);
 
             this.hederaAgentToolkit = new HederaLangchainToolkit({
