@@ -287,8 +287,20 @@ You are account ${this.env.HEDERA_ACCOUNT_ID} operating on ${this.env.HEDERA_NET
         }
     }
 
+    /** Parse schedule_id from validator inbound message metadata. */
+    private parseScheduleIdFromValidatorMessage(message: string): string | undefined {
+        try {
+            const parsed = JSON.parse(message) as { metadata?: string };
+            const metadata = parsed.metadata ? JSON.parse(parsed.metadata) as Record<string, unknown> : {};
+            const scheduleId = metadata.schedule_id as string;
+            return scheduleId && /^0\.0\.\d+$/.test(scheduleId) ? scheduleId : undefined;
+        } catch {
+            return undefined;
+        }
+    }
+
     /** Runs fetch + review. Used on startup and when validator inbound message received. */
-    private async runCheck(): Promise<void> {
+    private async runCheck(triggerScheduleId?: string): Promise<void> {
         if (this.isRunningCheck) {
             this.runCheckAgain = true;
             return;
@@ -296,7 +308,7 @@ You are account ${this.env.HEDERA_ACCOUNT_ID} operating on ${this.env.HEDERA_NET
         this.isRunningCheck = true;
         this.runCheckAgain = false;
         try {
-            await this.fetchPendingTransactions();
+            await this.fetchPendingTransactions(triggerScheduleId);
             await this.reviewAllPendingTransactions();
         } finally {
             this.isRunningCheck = false;
@@ -322,7 +334,8 @@ You are account ${this.env.HEDERA_ACCOUNT_ID} operating on ${this.env.HEDERA_NET
                 console.log(
                     `\n📥 ${message.consensusTimestamp.toDate().toISOString()} Validator inbound message received: ${messageAsString}`
                 );
-                this.runCheck().catch((err) => {
+                const scheduleId = this.parseScheduleIdFromValidatorMessage(messageAsString);
+                this.runCheck(scheduleId).catch((err) => {
                     console.error('❌ Error running check from inbound trigger:', err);
                 });
             });
@@ -430,8 +443,14 @@ You are account ${this.env.HEDERA_ACCOUNT_ID} operating on ${this.env.HEDERA_NET
         }
     }
 
-    private async fetchPendingTransactions(): Promise<void> {
+    private async fetchPendingTransactions(triggerScheduleId?: string): Promise<void> {
         try {
+            if (triggerScheduleId) {
+                console.log("🔍 Validator inbound trigger – reviewing schedule:", triggerScheduleId);
+                this.pendingScheduleIds = [triggerScheduleId];
+                return;
+            }
+
             const scheduleCreatorAccount = this.env.LYNX_CONTRACT_OPERATOR_ACCOUNT_ID?.trim() || this.lynxOperatorId;
             console.log("🔍 Fetching pending transactions...");
             console.log(`📝 Querying schedules from: ${scheduleCreatorAccount}${this.env.LYNX_CONTRACT_OPERATOR_ACCOUNT_ID ? ' (LYNX_CONTRACT_OPERATOR_ACCOUNT_ID)' : ' (LYNX_OPERATOR_ACCOUNT_ID)'}`);
