@@ -56,7 +56,11 @@ export class GetScheduleInfoTool extends StructuredTool {
             const contractCallDetails = this.decodeContractCall(scheduleData);
 
             // Extract key information
-            const expirationTime = scheduleData.expiration_time || null;
+            const expirationTime = scheduleData.expiration_time ?? scheduleData.expirationTime ?? null;
+            const expirationMs = this.parseExpirationToMs(expirationTime);
+            const secondsUntilExpiry = expirationMs != null
+                ? Math.floor((expirationMs - Date.now()) / 1000)
+                : (scheduleData.seconds_until_expiry ?? scheduleData.secondsUntilExpiry ?? null);
             const info = {
                 scheduleId: scheduleData.schedule_id,
                 creatorAccountId: scheduleData.creator_account_id,
@@ -69,10 +73,10 @@ export class GetScheduleInfoTool extends StructuredTool {
                 signaturesRequired: scheduleData.signatures?.length || 0,
                 transactionType: scheduleData.transaction_body ? this.detectTransactionType(scheduleData.transaction_body) : 'Unknown',
                 contractCall: contractCallDetails,
-                expirationTime,
-                ...(expirationTime && {
-                    secondsUntilExpiry: Math.floor((new Date(expirationTime).getTime() - Date.now()) / 1000),
-                    secondsUntilOneHourBeforeExpiry: Math.max(0, Math.floor((new Date(expirationTime).getTime() - Date.now()) / 1000) - 3600),
+                expirationTime: expirationTime ?? (expirationMs != null ? new Date(expirationMs).toISOString() : null),
+                ...(secondsUntilExpiry != null && {
+                    secondsUntilExpiry,
+                    secondsUntilOneHourBeforeExpiry: Math.max(0, secondsUntilExpiry - 3600),
                 }),
             };
 
@@ -97,6 +101,23 @@ export class GetScheduleInfoTool extends StructuredTool {
                 scheduleId: scheduleId
             }, null, 2);
         }
+    }
+
+    /** Parse expiration_time from mirror node - handles Unix seconds (number or string), ISO string. Returns ms or null. */
+    private parseExpirationToMs(expirationTime: unknown): number | null {
+        if (expirationTime == null) return null;
+        if (typeof expirationTime === 'number') {
+            return expirationTime < 1e12 ? expirationTime * 1000 : expirationTime;
+        }
+        if (typeof expirationTime === 'string') {
+            const parsed = parseFloat(expirationTime);
+            if (!Number.isNaN(parsed)) {
+                return parsed < 1e12 ? parsed * 1000 : parsed;
+            }
+            const ms = new Date(expirationTime).getTime();
+            return Number.isNaN(ms) ? null : ms;
+        }
+        return null;
     }
 
     private getMirrorNodeUrl(): string {
