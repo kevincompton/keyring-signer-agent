@@ -1,7 +1,6 @@
 const { config } = require('dotenv');
 const { join } = require('path');
 
-// Load environment variables from parent directory (workspace root)
 config({ path: join(__dirname, '..', '.env') });
 
 /** @type {import('next').NextConfig} */

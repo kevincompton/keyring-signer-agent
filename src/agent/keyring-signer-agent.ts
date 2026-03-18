@@ -1,4 +1,4 @@
-import { config } from 'dotenv';
+import '../load-env.js';
 import { Client, TopicMessageQuery, TopicMessageSubmitTransaction, TopicId } from '@hashgraph/sdk';
 import { EnvironmentConfig } from './agent-config.js';
 import { HederaLangchainToolkit, AgentMode, coreAccountPlugin, coreConsensusPlugin, coreConsensusQueryPlugin } from 'hedera-agent-kit';
@@ -13,8 +13,6 @@ import { QueryRegistryTopicTool } from '../tools/query-registry-topic.js';
 import { GetScheduleInfoTool } from '../tools/get-schedule-info.js';
 import { SchedulePassiveAgentsTool } from '../tools/schedule-passive-agents.js';
 
-// Load environment variables
-config();
 
 /** Extract final text output from LangChain 1.x agent invoke result */
 function getAgentOutput(result: { messages?: unknown[] }): string {
@@ -434,15 +432,16 @@ You are account ${this.env.HEDERA_ACCOUNT_ID} operating on ${this.env.HEDERA_NET
 
     private async fetchPendingTransactions(): Promise<void> {
         try {
+            const scheduleCreatorAccount = this.env.LYNX_CONTRACT_OPERATOR_ACCOUNT_ID?.trim() || this.lynxOperatorId;
             console.log("🔍 Fetching pending transactions...");
-            console.log(`📝 Using Lynx Operator ID: ${this.lynxOperatorId}`);
+            console.log(`📝 Querying schedules from: ${scheduleCreatorAccount}${this.env.LYNX_CONTRACT_OPERATOR_ACCOUNT_ID ? ' (LYNX_CONTRACT_OPERATOR_ACCOUNT_ID)' : ' (LYNX_OPERATOR_ACCOUNT_ID)'}`);
             
-            if (!this.lynxOperatorId) {
+            if (!scheduleCreatorAccount) {
                 throw new Error('Lynx operator ID not loaded');
             }
             
             const result = await this.agent?.invoke({
-                messages: [{ role: "human", content: `Use the fetch_pending_transactions tool with projectOperatorAccountId="${this.lynxOperatorId}".
+                messages: [{ role: "human", content: `Use the fetch_pending_transactions tool with projectOperatorAccountId="${scheduleCreatorAccount}".
 
 Return ONLY a JSON array of schedule IDs.` }],
             }, { configurable: { thread_id: "keyring-signer" } });

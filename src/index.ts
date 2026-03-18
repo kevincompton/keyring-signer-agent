@@ -3,11 +3,8 @@
 // Suppress noisy warnings and errors
 import './suppress-warnings.js';
 
-import { config } from 'dotenv';
+import './load-env.js';
 import { KeyringSignerAgent } from './agent/keyring-signer-agent.js';
-
-// Load environment variables
-config();
 
 /**
  * KeyRing Signer Agent - Main Entry Point

@@ -1,11 +1,10 @@
-// Load environment variables FIRST, before any other imports that depend on them
-import { config } from 'dotenv';
-config(); // Loads .env by default
+import '../load-env.js';
 
 // Now import everything else
 import {
     Client,
     TopicCreateTransaction,
+    TopicUpdateTransaction,
     TopicInfoQuery,
     PrivateKey,
     AccountId,
@@ -14,14 +13,18 @@ import {
 const NETWORK = process.env.HEDERA_NETWORK || 'testnet';
 const isMainnet = NETWORK === 'mainnet';
 
-/** Parse Lynx operator private key (ED25519 hex or DER). */
+/** Parse Lynx operator private key (ED25519 hex or DER). Must match Lynx parseValidatorInboundKey exactly. */
 function parseLynxOperatorKey(keyStr: string): PrivateKey {
-    const trimmed = keyStr.trim();
+    const raw = keyStr.trim();
     try {
-        if (trimmed.startsWith('302') || trimmed.startsWith('30')) {
-            return PrivateKey.fromStringDer(trimmed);
+        if (raw.startsWith('302') || raw.startsWith('30')) {
+            return PrivateKey.fromStringDer(raw);
         }
-        return PrivateKey.fromStringED25519(trimmed);
+        const k = raw.replace(/^0x/, '');
+        if (k.length === 64 && /^[0-9a-fA-F]+$/.test(k)) {
+            return PrivateKey.fromStringED25519(k);
+        }
+        return PrivateKey.fromString(raw);
     } catch (e) {
         throw new Error(`Invalid Lynx operator key: ${e instanceof Error ? e.message : String(e)}`);
     }
@@ -45,10 +48,17 @@ async function getOrCreateValidatorInboundTopic(
                 .setTopicId(existingTopicId)
                 .execute(client);
 
-            console.log(`✓ Using existing ${network} validator inbound topic:`, existingTopicId);
+            console.log(`✓ Updating existing ${network} validator inbound topic submit key:`, existingTopicId);
+            const updateTx = new TopicUpdateTransaction()
+                .setTopicId(existingTopicId)
+                .setSubmitKey(lynxOperatorKey.publicKey);
+            const updateResponse = await updateTx.execute(client);
+            await updateResponse.getReceipt(client);
+            console.log(`✅ Topic submit key synced to Lynx operator`);
             return existingTopicId;
-        } catch {
-            console.log(`⚠️  Existing ${network} validator inbound topic not found or invalid, creating new topic...`);
+        } catch (e) {
+            console.log(`⚠️  Existing ${network} validator inbound topic not found or invalid:`, e instanceof Error ? e.message : e);
+            console.log(`Creating new topic...`);
         }
     }
 

@@ -5,7 +5,7 @@
 
 import express, { Request, Response } from 'express';
 import cors from 'cors';
-import { config } from 'dotenv';
+import '../load-env.js';
 import { Client, TopicId, AccountInfoQuery, AccountId } from '@hashgraph/sdk';
 import type { 
   ApiResponse, 
@@ -15,8 +15,6 @@ import type {
   DashboardStats,
   TopicMessage 
 } from '../types/api.js';
-
-config();
 
 const app = express();
 const PORT = process.env.API_PORT || 3001;

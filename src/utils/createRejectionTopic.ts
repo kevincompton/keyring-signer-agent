@@ -1,6 +1,5 @@
 // Load environment variables FIRST, before any other imports that depend on them
-import { config } from 'dotenv';
-config(); // Loads .env by default
+import '../load-env.js';
 
 // Now import everything else
 import { Client, TopicMessageSubmitTransaction, TopicCreateTransaction, TopicInfoQuery, PrivateKey, AccountId, KeyList, PublicKey } from '@hashgraph/sdk';

@@ -8,7 +8,7 @@ import {
     Hbar,
     ContractId,
 } from '@hashgraph/sdk';
-import * as dotenv from 'dotenv';
+import '../load-env.js';
 import { ethers } from 'ethers';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -17,8 +17,6 @@ import { fileURLToPath } from 'url';
 // ES module equivalent of __dirname
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-
-dotenv.config();
 
 /**
  * Utility script to create test/example scheduled transactions for the Keyring Signer Agent.

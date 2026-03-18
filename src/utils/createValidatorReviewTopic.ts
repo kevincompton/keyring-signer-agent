@@ -1,6 +1,4 @@
-// Load environment variables FIRST, before any other imports that depend on them
-import { config } from 'dotenv';
-config(); // Loads .env by default
+import '../load-env.js';
 
 // Now import everything else
 import { Client, TopicCreateTransaction, TopicInfoQuery, PrivateKey, AccountId } from '@hashgraph/sdk';
@@ -23,7 +21,7 @@ async function createValidatorReviewTopic(
     network: string,
     adminKey: PrivateKey
 ): Promise<string> {
-    const existingTopicId = process.env.PROJECT_VALIDATOR_REVIEW_TOPIC;
+    const existingTopicId = (process.env.PROJECT_VALIDATOR_REVIEW_TOPIC ?? '').trim();
 
     if (existingTopicId && existingTopicId !== '0.0.0') {
         try {

@@ -7,11 +7,8 @@ import {
     AccountInfoQuery,
     Hbar
   } from "@hashgraph/sdk";
-  import * as dotenv from "dotenv";
   import * as path from "path";
-  
-// Load .env from the project root
-dotenv.config();
+  import '../load-env.js';
 
 interface CreateThresholdOptions {
   publicKeys: string[];

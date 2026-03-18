@@ -17,6 +17,8 @@ export interface EnvironmentConfig {
     LYNX_TESTNET_OPERATOR_ID?: string;
     /** Lynx operator account (mainnet) - used when HEDERA_NETWORK=mainnet */
     LYNX_OPERATOR_ACCOUNT_ID?: string;
+    /** Lynx contract operator - account that creates schedules (from getScheduleEnv). If set, used for mirror node schedule query. */
+    LYNX_CONTRACT_OPERATOR_ACCOUNT_ID?: string;
     /** KeyRing operator account (project dashboard) - transactions from this account are trusted for allowed actions (e.g. setAdmin to new threshold list) */
     KEYRING_OPERATOR_ACCOUNT_ID?: string;
     /** KeyRing operator public key (hex or DER) - required for creating operator inbound topic */
