@@ -61,21 +61,27 @@ export class KeyringSignerAgent {
         console.log("==========================================");
 
         // Validate required environment variables
+        const network = this.env.HEDERA_NETWORK || 'testnet';
+        const isMainnet = network === 'mainnet';
+        const operatorIdVar = isMainnet ? 'LYNX_OPERATOR_ACCOUNT_ID' : 'LYNX_TESTNET_OPERATOR_ID';
+
         const requiredVars = [
             'OPENAI_API_KEY',
             'HEDERA_ACCOUNT_ID',
             'HEDERA_PRIVATE_KEY',
             'OPERATOR_PUBLIC_KEY',
-            'PROJECT_REGISTRY_TOPIC',
             'PROJECT_CONTRACTS_TOPIC',
             'PROJECT_AUDIT_TOPIC',
             'PROJECT_REJECTION_TOPIC',
-            'PROJECT_VALIDATOR_TOPIC'
+            'PROJECT_VALIDATOR_REVIEW_TOPIC'
         ];
 
         const missingVars = requiredVars.filter(varName => !this.env[varName]);
         if (missingVars.length > 0) {
             throw new Error(`Missing required environment variables: ${missingVars.join(', ')}`);
+        }
+        if (!this.env[operatorIdVar]) {
+            throw new Error(`Missing ${operatorIdVar} (Lynx operator for ${network})`);
         }
 
         try {
@@ -126,8 +132,7 @@ export class KeyringSignerAgent {
             const systemPrompt = `You are an autonomous Keyring Signer Agent for the Hedera blockchain. Your role is to act as a threshold signature key holder for project accounts.
 
 RESPONSIBILITIES:
-1. Load and understand project configurations from HCS (Hedera Consensus Service) registry topics
-2. Review and validate smart contract ABIs to understand expected transaction patterns
+1. Review and validate smart contract ABIs to understand expected transaction patterns
 3. Monitor for pending scheduled transactions that require your signature
 4. Autonomously validate transactions against known contract patterns and security requirements
 5. Sign valid transactions that match expected behavior
@@ -197,7 +202,7 @@ WORKFLOW:
   2. MUST REJECT if secondsUntilExpiry < 172800 (48 hours) — signers need time
   3. Analyze against the validation rules above
   4. Determine risk level (low/medium/high/critical)
-  5. Post validation message to validator topic
+  5. Post validation message to validator review topic
   6. If high/critical: Post rejection to rejection topic and DO NOT SIGN
   7. If low/medium: Sign the transaction, then IMMEDIATELY call schedule_passive_agents with scheduleId and durationSeconds = schedule.secondsUntilOneHourBeforeExpiry (schedules review to execute 1 hour before expiry)
 - Maintain detailed logs of all decisions
@@ -209,7 +214,7 @@ TOOLS AT YOUR DISPOSAL:
 - get_schedule_info: Get decoded transaction details including function name and parameters
 - sign_transaction: Sign approved transactions
 - schedule_passive_agents: After signing an approved schedule (from pending transactions), call this to schedule passive agents — use scheduleId and durationSeconds = secondsUntilOneHourBeforeExpiry from get_schedule_info (executes 1 hour before expiry)
-- SUBMIT_TOPIC_MESSAGE_TOOL: Post validation/rejection messages to HCS topics
+- SUBMIT_TOPIC_MESSAGE_TOOL: Post validation messages to validator review topic, rejection messages to rejection topic
 
 IMPORTANT: Hedera scheduled transactions are immutable — they cannot be deleted. Do not attempt to delete schedules. For invalid or unwanted schedules, post a rejection and do not sign; the schedule will expire if not executed.
 
@@ -257,7 +262,7 @@ You are account ${this.env.HEDERA_ACCOUNT_ID} operating on ${this.env.HEDERA_NET
             });
         }
         try {
-            await this.loadProjectDetails();
+            await this.loadOperatorId();
             await this.loadContractDetails();
             await this.runCheck();
 
@@ -398,36 +403,14 @@ You are account ${this.env.HEDERA_ACCOUNT_ID} operating on ${this.env.HEDERA_NET
         console.log("✅ Keyring Signer Agent stopped");
     }
 
-    private async loadProjectDetails(): Promise<void> {
-        try {
-            console.log("📋 Loading project details from registry topic...");
-            console.log(`   Topic ID: ${this.env.PROJECT_REGISTRY_TOPIC}`);
-            
-            const result = await this.agent?.invoke({
-                messages: [{ role: "human", content: `Use the query_registry_topic tool to query topic ${this.env.PROJECT_REGISTRY_TOPIC}.
-
-Extract the "operatorAccountId" field from the metadata in the returned message.
-
-Return ONLY the operator account ID in format 0.0.xxxxx` }],
-            }, { configurable: { thread_id: "keyring-signer" } });
-
-            const output = getAgentOutput(result ?? {});
-            console.log("✅ Project details loaded:", output);
-
-            const operatorMatch = output?.match(/0\.0\.\d+/);
-            if (operatorMatch) {
-                this.lynxOperatorId = operatorMatch[0];
-                console.log(`📝 Lynx Operator ID: ${this.lynxOperatorId}`);
-            } else {
-                throw new Error('Could not extract operator ID from registry');
-            }
-            
-            // Small delay after AI operation
-            await new Promise(resolve => setTimeout(resolve, 1000));
-        } catch (error) {
-            console.error("❌ Error loading project details:", error);
-            throw error;
+    private async loadOperatorId(): Promise<void> {
+        const network = this.env.HEDERA_NETWORK || 'testnet';
+        const isMainnet = network === 'mainnet';
+        this.lynxOperatorId = (isMainnet ? this.env.LYNX_OPERATOR_ACCOUNT_ID : this.env.LYNX_TESTNET_OPERATOR_ID) ?? '';
+        if (!this.lynxOperatorId || !/^0\.0\.\d+$/.test(this.lynxOperatorId)) {
+            throw new Error(`Invalid or missing Lynx operator ID. Set ${isMainnet ? 'LYNX_OPERATOR_ACCOUNT_ID' : 'LYNX_TESTNET_OPERATOR_ID'}`);
         }
+        console.log(`📝 Lynx Operator ID: ${this.lynxOperatorId}`);
     }
 
     private async loadContractDetails(): Promise<void> {
@@ -566,7 +549,7 @@ STEP 3: Analyze the transaction
 - Determine risk level: low, medium, high, or critical
 
 STEP 4: Post validation message
-- Always post to topic ${this.env.PROJECT_VALIDATOR_TOPIC} with:
+- Always post to topic ${this.env.PROJECT_VALIDATOR_REVIEW_TOPIC} with:
    {
      "scheduleId": "${scheduleId}",
      "reviewer": "${this.env.HEDERA_ACCOUNT_ID}",

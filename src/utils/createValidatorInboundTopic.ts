@@ -9,22 +9,33 @@ import {
     TopicInfoQuery,
     PrivateKey,
     AccountId,
-    CustomFixedFee,
-    Hbar,
 } from '@hashgraph/sdk';
 
-// Get network from environment variable
 const NETWORK = process.env.HEDERA_NETWORK || 'testnet';
 const isMainnet = NETWORK === 'mainnet';
 
-/** Fee per message submission in HBAR (HIP-991). Default 0.01 HBAR. */
-const DEFAULT_TOPIC_FEE_HBAR = 0.01;
+/** Parse Lynx operator private key (ED25519 hex or DER). */
+function parseLynxOperatorKey(keyStr: string): PrivateKey {
+    const trimmed = keyStr.trim();
+    try {
+        if (trimmed.startsWith('302') || trimmed.startsWith('30')) {
+            return PrivateKey.fromStringDer(trimmed);
+        }
+        return PrivateKey.fromStringED25519(trimmed);
+    } catch (e) {
+        throw new Error(`Invalid Lynx operator key: ${e instanceof Error ? e.message : String(e)}`);
+    }
+}
 
+/**
+ * Create or get validator inbound topic. HCS-2 non-indexed.
+ * Lynx operator posts here to trigger the agent to check for schedules.
+ */
 async function getOrCreateValidatorInboundTopic(
     client: Client,
     network: string,
-    operatorId: AccountId,
-    operatorKey: PrivateKey
+    adminKey: PrivateKey,
+    lynxOperatorKey: PrivateKey
 ): Promise<string> {
     const existingTopicId = process.env.PROJECT_VALIDATOR_INBOUND_TOPIC;
 
@@ -41,29 +52,21 @@ async function getOrCreateValidatorInboundTopic(
         }
     }
 
-    const feeHbar = parseFloat(process.env.VALIDATOR_INBOUND_TOPIC_FEE_HBAR || String(DEFAULT_TOPIC_FEE_HBAR));
-    const topicFee = new Hbar(feeHbar);
-
-    console.log(`📝 Creating Validator Inbound topic on ${network.toUpperCase()} (HCS-2 non-indexed, private, HIP-991 fees: ${topicFee} per message)...`);
-
-    const customFee = new CustomFixedFee({
-        feeCollectorAccountId: operatorId,
-    }).setHbarAmount(topicFee);
+    // HCS-2 non-indexed: hcs-2:1:86400 (1 = non-indexed, 86400 = 24h TTL)
+    console.log(`📝 Creating Validator Inbound topic on ${network.toUpperCase()} (HCS-2 non-indexed, Lynx operator trigger)...`);
 
     const createTopicTx = new TopicCreateTransaction()
-        .setTopicMemo(`hcs-2:${operatorId}:validator-inbound`) // HCS-2 non-indexed
-        .setSubmitKey(operatorKey.publicKey) // Project operator (Lynx) only - private
-        .setAdminKey(operatorKey.publicKey)
-        .setFeeScheduleKey(operatorKey.publicKey)
-        .addFeeExemptKey(operatorKey.publicKey) // Operator can submit without paying
-        .addCustomFee(customFee);
+        .setTopicMemo('hcs-2:1:86400') // HCS-2 non-indexed, 24 hour TTL
+        .setSubmitKey(lynxOperatorKey.publicKey) // Lynx operator posts to trigger agent
+        .setAdminKey(adminKey.publicKey);
 
     const createResponse = await createTopicTx.execute(client);
     const createReceipt = await createResponse.getReceipt(client);
     const newTopicId = createReceipt.topicId!.toString();
 
     console.log(`✅ Created new ${network} validator inbound topic with ID:`, newTopicId);
-    console.log(`\n📋 Add this to your .env file:\nPROJECT_VALIDATOR_INBOUND_TOPIC=${newTopicId}\n`);
+    console.log(`\n📋 Add this to your .env file:\nPROJECT_VALIDATOR_INBOUND_TOPIC=${newTopicId}`);
+    console.log(`\n💡 Lynx operator posts to this topic to trigger the agent to check for schedules.\n`);
     return newTopicId;
 }
 
@@ -98,13 +101,25 @@ async function setupValidatorInboundTopic() {
             throw error;
         }
 
-        console.log(`🔑 Operator Account: ${operatorId}\n`);
+        console.log(`🔑 Agent Account (admin): ${operatorId}\n`);
+
+        const lynxOperatorId = isMainnet ? process.env.LYNX_OPERATOR_ACCOUNT_ID : process.env.LYNX_TESTNET_OPERATOR_ID;
+        const lynxOperatorKey = isMainnet ? process.env.LYNX_OPERATOR_KEY : process.env.LYNX_TESTNET_OPERATOR_KEY;
+
+        if (!lynxOperatorId || !lynxOperatorKey) {
+            throw new Error(
+                `Missing Lynx operator credentials. Set ${isMainnet ? 'LYNX_OPERATOR_ACCOUNT_ID and LYNX_OPERATOR_KEY' : 'LYNX_TESTNET_OPERATOR_ID and LYNX_TESTNET_OPERATOR_KEY'}`
+            );
+        }
+
+        const lynxOperatorPrivateKey = parseLynxOperatorKey(lynxOperatorKey);
+        console.log(`📤 Lynx operator (submit/trigger): ${lynxOperatorId}\n`);
 
         const client = isMainnet
             ? Client.forMainnet().setOperator(operatorId, operatorPrivateKey)
             : Client.forTestnet().setOperator(operatorId, operatorPrivateKey);
 
-        const topicId = await getOrCreateValidatorInboundTopic(client, NETWORK, operatorId, operatorPrivateKey);
+        const topicId = await getOrCreateValidatorInboundTopic(client, NETWORK, operatorPrivateKey, lynxOperatorPrivateKey);
 
         console.log('\n🎉 Validator inbound topic created successfully!');
         console.log('═══════════════════════════════════════');
@@ -117,12 +132,7 @@ async function setupValidatorInboundTopic() {
         console.log(`\n🔍 View on HashScan:`);
         console.log(`Topic: ${explorerBase}/topic/${topicId}`);
 
-        const feeHbar = process.env.VALIDATOR_INBOUND_TOPIC_FEE_HBAR || String(DEFAULT_TOPIC_FEE_HBAR);
-        console.log('\n💡 HIP-991 Topic Fees:');
-        console.log(`   - Fee per message: ${feeHbar} HBAR`);
-        console.log('   - Fee collector: operator account');
-        console.log('   - Fee exempt: operator key (validator can submit free)');
-        console.log('   - Public submissions: pay fee to submit');
+        console.log('\n💡 Usage: Lynx operator posts a message to this topic to trigger the agent to check for pending schedules.');
 
         console.log('\n✨ Validator Inbound Topic Setup Complete!\n');
 
@@ -132,13 +142,12 @@ async function setupValidatorInboundTopic() {
         console.error('\n💡 Troubleshooting:');
         console.error('- Ensure HEDERA_NETWORK is set to "testnet" or "mainnet"');
         console.error('- Set HEDERA_ACCOUNT_ID and HEDERA_PRIVATE_KEY in your .env file');
-        console.error('- Check that your account has sufficient HBAR balance');
+        console.error('- Set Lynx operator credentials (LYNX_OPERATOR_ACCOUNT_ID/LYNX_OPERATOR_KEY or LYNX_TESTNET_*)');
         console.error(`- Current network: ${NETWORK}\n`);
         throw error;
     }
 }
 
-// Run the script
 setupValidatorInboundTopic();
 
 export { getOrCreateValidatorInboundTopic };

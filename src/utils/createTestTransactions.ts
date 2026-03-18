@@ -54,9 +54,13 @@ class TestTransactionCreator {
     constructor() {
         // Initialize Hedera client
         const network = process.env.HEDERA_NETWORK || 'testnet';
-        
-        if (!process.env.LYNX_TESTNET_OPERATOR_ID || !process.env.LYNX_TESTNET_OPERATOR_KEY) {
-            throw new Error('Missing required environment variables: LYNX_TESTNET_OPERATOR_ID, LYNX_TESTNET_OPERATOR_KEY');
+        const isMainnet = network === 'mainnet';
+
+        const operatorId = isMainnet ? process.env.LYNX_OPERATOR_ACCOUNT_ID : process.env.LYNX_TESTNET_OPERATOR_ID;
+        const operatorKey = isMainnet ? process.env.LYNX_OPERATOR_KEY : process.env.LYNX_TESTNET_OPERATOR_KEY;
+
+        if (!operatorId || !operatorKey) {
+            throw new Error(`Missing required environment variables: ${isMainnet ? 'LYNX_OPERATOR_ACCOUNT_ID, LYNX_OPERATOR_KEY' : 'LYNX_TESTNET_OPERATOR_ID, LYNX_TESTNET_OPERATOR_KEY'}`);
         }
 
         if (!process.env.THRESHOLD_ACCOUNT_ID) {
@@ -67,8 +71,8 @@ class TestTransactionCreator {
             throw new Error('Missing required environment variable: LYNX_TESTNET_CONTRACT');
         }
 
-        this.operatorId = AccountId.fromString(process.env.LYNX_TESTNET_OPERATOR_ID);
-        this.operatorKey = PrivateKey.fromStringED25519(process.env.LYNX_TESTNET_OPERATOR_KEY);
+        this.operatorId = AccountId.fromString(operatorId);
+        this.operatorKey = PrivateKey.fromStringED25519(operatorKey);
         this.thresholdAccountId = AccountId.fromString(process.env.THRESHOLD_ACCOUNT_ID);
 
         if (network === 'mainnet') {

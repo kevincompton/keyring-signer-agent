@@ -11,11 +11,13 @@ export const revalidate = 0;
 
 export async function GET() {
   try {
-    const operatorAccountId = process.env.LYNX_TESTNET_OPERATOR_ID;
+    const operatorAccountId = NETWORK === 'mainnet'
+      ? process.env.LYNX_OPERATOR_ACCOUNT_ID
+      : process.env.LYNX_TESTNET_OPERATOR_ID;
     if (!operatorAccountId) {
       return NextResponse.json({
         success: false,
-        error: 'LYNX_TESTNET_OPERATOR_ID not configured'
+        error: NETWORK === 'mainnet' ? 'LYNX_OPERATOR_ACCOUNT_ID not configured' : 'LYNX_TESTNET_OPERATOR_ID not configured'
       }, { status: 400 });
     }
 

@@ -8,6 +8,9 @@ dashboard/node_modules/
 .env.production
 .env.development
 
+# Rejection topic signers (contains public keys - keep local only)
+config/rejection-topic-signers-mainnet.csv
+
 # Build outputs
 dist/
 build/

@@ -145,7 +145,7 @@ For each test transaction, the agent should:
      - Common attack patterns
 
 4. **Post Validation Message**
-   - ALWAYS post to `PROJECT_VALIDATOR_TOPIC`
+   - ALWAYS post to `PROJECT_VALIDATOR_REVIEW_TOPIC`
    - Include: scheduleId, reviewer, description, riskLevel, timestamp, projectRegistrationTxId
 
 5. **Decision**
@@ -232,7 +232,7 @@ After creating test transactions:
 1. **Run the agent**: `npm start`
 2. **Monitor agent output**: Watch console for transaction reviews
 3. **Check HCS topics**: 
-   - View validation messages in `PROJECT_VALIDATOR_TOPIC`
+   - View validation messages in `PROJECT_VALIDATOR_REVIEW_TOPIC`
    - View rejections in `PROJECT_REJECTION_TOPIC`
 4. **Verify signatures**: Check if expected transactions were signed on Hedera
 

@@ -26,7 +26,7 @@ graph TB
             Registry["PROJECT_REGISTRY_TOPIC<br/>Project metadata & verification"]
             Contracts["PROJECT_CONTRACTS_TOPIC<br/>Smart contract ABIs"]
             Audit["PROJECT_AUDIT_TOPIC<br/>Audit reports"]
-            Validator["PROJECT_VALIDATOR_TOPIC<br/>Validation results"]
+            Validator["PROJECT_VALIDATOR_REVIEW_TOPIC<br/>Validation results"]
             Rejection["PROJECT_REJECTION_TOPIC<br/>Rejected transactions"]
         end
         

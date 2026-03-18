@@ -4,6 +4,8 @@ config(); // Loads .env by default
 
 // Now import everything else
 import { Client, TopicMessageSubmitTransaction, TopicCreateTransaction, TopicInfoQuery, PrivateKey, AccountId, KeyList, PublicKey } from '@hashgraph/sdk';
+import { readFileSync, existsSync } from 'fs';
+import { join } from 'path';
 
 // Get network from environment variable
 const NETWORK = process.env.HEDERA_NETWORK || 'testnet';
@@ -18,39 +20,115 @@ interface RejectionMessage {
     projectRegistrationTxId: string; // Transaction ID of the project registration
 }
 
+interface AgentConfig {
+    accountId: string;
+    operatorPublicKey: string;
+    inboundTopicId?: string;
+}
+
 function parseKeyToPublicKey(keyStr: string): PublicKey {
+    const trimmed = keyStr.trim();
     try {
-        if (keyStr.startsWith('302a') || keyStr.startsWith('302d')) return PublicKey.fromString(keyStr);
-        if (keyStr.startsWith('302e')) return PrivateKey.fromString(keyStr).publicKey;
-        if (keyStr.length === 64 && /^[0-9a-fA-F]+$/.test(keyStr)) return PublicKey.fromBytesED25519(Buffer.from(keyStr, 'hex'));
-        return PublicKey.fromString(keyStr);
+        if (trimmed.startsWith('302a') || trimmed.startsWith('302d')) return PublicKey.fromString(trimmed);
+        if (trimmed.startsWith('302e')) return PrivateKey.fromString(trimmed).publicKey;
+        if (trimmed.startsWith('03') && trimmed.length === 66 && /^[0-9a-fA-F]+$/.test(trimmed)) return PublicKey.fromString(trimmed);
+        if (trimmed.length === 64 && /^[0-9a-fA-F]+$/.test(trimmed)) return PublicKey.fromBytesED25519(Buffer.from(trimmed, 'hex'));
+        return PublicKey.fromString(trimmed);
     } catch {
-        throw new Error(`Failed to parse key: ${keyStr.slice(0, 20)}...`);
+        throw new Error(`Failed to parse key: ${trimmed.slice(0, 20)}...`);
     }
 }
 
-/** Parse threshold signer public keys from env. Supports THRESHOLD_SIGNER_PUBLIC_KEYS (comma-separated) or OPERATOR_PUBLIC_KEY + TEST_SIGNER1/2. */
+/**
+ * Collect all threshold signer public keys for the rejection topic submit key.
+ * Sources (in order): OPERATOR_PUBLIC_KEY (agent), AGENT_CONFIGS (passive agents),
+ * REJECTION_TOPIC_SIGNERS_CSV (or config/rejection-topic-signers-mainnet.csv when mainnet),
+ * THRESHOLD_SIGNER_PUBLIC_KEYS (comma-separated).
+ */
 function parseThresholdSignerKeys(): PublicKey[] {
+    const keys: PublicKey[] = [];
+    const seen = new Set<string>();
+
+    const addKey = (keyInput: string, pk: PublicKey) => {
+        const norm = keyInput.trim().toLowerCase();
+        if (seen.has(norm)) return;
+        seen.add(norm);
+        keys.push(pk);
+    };
+
+    // 1. Agent (OPERATOR_PUBLIC_KEY)
+    const operatorKey = process.env.OPERATOR_PUBLIC_KEY;
+    if (operatorKey) {
+        try {
+            addKey(operatorKey, parseKeyToPublicKey(operatorKey));
+        } catch (e) {
+            throw new Error(`Invalid OPERATOR_PUBLIC_KEY: ${e instanceof Error ? e.message : String(e)}`);
+        }
+    }
+
+    // 2. Passive agents from AGENT_CONFIGS
+    const agentConfigs = process.env.AGENT_CONFIGS;
+    if (agentConfigs?.trim()) {
+        try {
+            const configs = JSON.parse(agentConfigs) as AgentConfig[];
+            if (Array.isArray(configs)) {
+                for (const c of configs) {
+                    if (c?.operatorPublicKey) {
+                        addKey(c.operatorPublicKey, parseKeyToPublicKey(c.operatorPublicKey));
+                    }
+                }
+            }
+        } catch {
+            // ignore parse errors
+        }
+    }
+
+    // 3. CSV: REJECTION_TOPIC_SIGNERS_CSV or default mainnet CSV
+    const csvPath = process.env.REJECTION_TOPIC_SIGNERS_CSV
+        || (isMainnet ? join(process.cwd(), 'config', 'rejection-topic-signers-mainnet.csv') : null);
+    if (csvPath && existsSync(csvPath)) {
+        const content = readFileSync(csvPath, 'utf-8');
+        const lines = content.split('\n').map((l) => l.trim()).filter(Boolean);
+        const header = lines[0]?.toLowerCase() ?? '';
+        const keyCol = header.includes('public_key') ? header.split(',').map((c) => c.trim()).indexOf('public_key') : 1;
+        for (let i = 1; i < lines.length; i++) {
+            const cols = lines[i].split(',').map((c) => c.trim());
+            const keyVal = cols[keyCol];
+            if (!keyVal || seen.has(keyVal.toLowerCase())) continue;
+            try {
+                addKey(keyVal, parseKeyToPublicKey(keyVal));
+            } catch {
+                console.warn(`[REJECTION_TOPIC] Skipping invalid key in CSV line ${i + 1}`);
+            }
+        }
+    }
+
+    // 4. THRESHOLD_SIGNER_PUBLIC_KEYS (comma-separated) - legacy / extra
     const keysEnv = process.env.THRESHOLD_SIGNER_PUBLIC_KEYS;
     if (keysEnv) {
-        const keys = keysEnv.split(',').map((k) => k.trim()).filter(Boolean);
-        if (keys.length === 0) throw new Error('THRESHOLD_SIGNER_PUBLIC_KEYS is empty');
-        return keys.map((keyStr, index) => {
+        for (const keyStr of keysEnv.split(',').map((k) => k.trim()).filter(Boolean)) {
             try {
-                return parseKeyToPublicKey(keyStr);
+                addKey(keyStr, parseKeyToPublicKey(keyStr));
             } catch (e) {
-                throw new Error(`Failed to parse threshold signer key ${index + 1}: ${keyStr.slice(0, 20)}...`);
+                throw new Error(`Invalid key in THRESHOLD_SIGNER_PUBLIC_KEYS: ${keyStr.slice(0, 20)}...`);
             }
-        });
+        }
     }
-    const operatorKey = process.env.OPERATOR_PUBLIC_KEY;
-    const signer1 = process.env.TEST_SIGNER1;
-    const signer2 = process.env.TEST_SIGNER2;
-    const keys: PublicKey[] = [];
-    if (operatorKey) keys.push(parseKeyToPublicKey(operatorKey));
-    if (signer1) keys.push(parseKeyToPublicKey(signer1));
-    if (signer2) keys.push(parseKeyToPublicKey(signer2));
-    if (keys.length === 0) throw new Error('Set THRESHOLD_SIGNER_PUBLIC_KEYS (comma-separated) or OPERATOR_PUBLIC_KEY + TEST_SIGNER1/2');
+
+    // 5. Fallback: TEST_SIGNER1, TEST_SIGNER2 (if no other sources)
+    if (keys.length === 0) {
+        const signer1 = process.env.TEST_SIGNER1;
+        const signer2 = process.env.TEST_SIGNER2;
+        if (operatorKey) keys.push(parseKeyToPublicKey(operatorKey));
+        if (signer1) keys.push(parseKeyToPublicKey(signer1));
+        if (signer2) keys.push(parseKeyToPublicKey(signer2));
+    }
+
+    if (keys.length === 0) {
+        throw new Error(
+            'No threshold signer keys found. Set OPERATOR_PUBLIC_KEY, AGENT_CONFIGS, REJECTION_TOPIC_SIGNERS_CSV, or THRESHOLD_SIGNER_PUBLIC_KEYS.'
+        );
+    }
     return keys;
 }
 

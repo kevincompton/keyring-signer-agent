@@ -10,9 +10,13 @@ export interface EnvironmentConfig {
     PROJECT_CONTRACTS_TOPIC?: string;
     PROJECT_AUDIT_TOPIC?: string;
     PROJECT_REJECTION_TOPIC?: string;
-    PROJECT_VALIDATOR_TOPIC?: string;
+    PROJECT_VALIDATOR_REVIEW_TOPIC?: string;
     PROJECT_VALIDATOR_INBOUND_TOPIC?: string;
     LYNX_REGISTRATION_TX?: string;
+    /** Lynx operator account (testnet) - creates scheduled transactions */
+    LYNX_TESTNET_OPERATOR_ID?: string;
+    /** Lynx operator account (mainnet) - used when HEDERA_NETWORK=mainnet */
+    LYNX_OPERATOR_ACCOUNT_ID?: string;
     /** KeyRing operator account (project dashboard) - transactions from this account are trusted for allowed actions (e.g. setAdmin to new threshold list) */
     KEYRING_OPERATOR_ACCOUNT_ID?: string;
     /** KeyRing operator public key (hex or DER) - required for creating operator inbound topic */

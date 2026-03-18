@@ -16,7 +16,7 @@
     "project:contracts": "node --loader ts-node/esm src/utils/projectContractTopic.ts",
     "project:audits": "node --loader ts-node/esm src/utils/projectAuditTopic.ts",
     "project:rejection": "node --loader ts-node/esm src/utils/createRejectionTopic.ts",
-    "project:validator": "node --loader ts-node/esm src/utils/createValidatorTopic.ts",
+    "project:validator-review": "node --loader ts-node/esm src/utils/createValidatorReviewTopic.ts",
     "project:validator-inbound": "node --loader ts-node/esm src/utils/createValidatorInboundTopic.ts",
     "project:operator-inbound": "node --loader ts-node/esm src/utils/createOperatorInboundTopic.ts",
     "threshold:create": "node --loader ts-node/esm src/utils/createThreshold.ts",

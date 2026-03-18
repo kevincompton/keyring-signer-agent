@@ -85,10 +85,10 @@ async function sendTestProject() {
         
         const topicId = await getOrCreateProjectRegistryTopic(client, NETWORK, operatorPrivateKey);
 
-        // Get Lynx testnet operator ID (the account that creates transactions)
-        const lynxOperatorId = process.env.LYNX_TESTNET_OPERATOR_ID;
+        // Get Lynx operator ID (mainnet vs testnet)
+        const lynxOperatorId = isMainnet ? process.env.LYNX_OPERATOR_ACCOUNT_ID : process.env.LYNX_TESTNET_OPERATOR_ID;
         if (!lynxOperatorId) {
-            throw new Error('Missing LYNX_TESTNET_OPERATOR_ID environment variable');
+            throw new Error(`Missing ${isMainnet ? 'LYNX_OPERATOR_ACCOUNT_ID' : 'LYNX_TESTNET_OPERATOR_ID'} environment variable`);
         }
 
         // Project data matching new database schema

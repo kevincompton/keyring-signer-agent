@@ -147,14 +147,19 @@ app.get('/api/threshold', async (req: Request, res: Response) => {
   }
 });
 
+// Get Lynx operator ID based on network (mainnet vs testnet)
+const lynxOperatorAccountId = NETWORK === 'mainnet'
+  ? process.env.LYNX_OPERATOR_ACCOUNT_ID
+  : process.env.LYNX_TESTNET_OPERATOR_ID;
+
 // Get scheduled transactions
 app.get('/api/transactions', async (req: Request, res: Response) => {
   try {
-    const operatorAccountId = process.env.LYNX_TESTNET_OPERATOR_ID;
+    const operatorAccountId = lynxOperatorAccountId;
     if (!operatorAccountId) {
       return res.status(400).json({
         success: false,
-        error: 'LYNX_TESTNET_OPERATOR_ID not configured'
+        error: NETWORK === 'mainnet' ? 'LYNX_OPERATOR_ACCOUNT_ID not configured' : 'LYNX_TESTNET_OPERATOR_ID not configured'
       } as ApiResponse<ScheduledTransaction[]>);
     }
 
@@ -223,11 +228,11 @@ app.get('/api/transactions', async (req: Request, res: Response) => {
 // Get dashboard stats
 app.get('/api/stats', async (req: Request, res: Response) => {
   try {
-    const operatorAccountId = process.env.LYNX_TESTNET_OPERATOR_ID;
+    const operatorAccountId = lynxOperatorAccountId;
     if (!operatorAccountId) {
       return res.status(400).json({
         success: false,
-        error: 'LYNX_TESTNET_OPERATOR_ID not configured'
+        error: NETWORK === 'mainnet' ? 'LYNX_OPERATOR_ACCOUNT_ID not configured' : 'LYNX_TESTNET_OPERATOR_ID not configured'
       } as ApiResponse<DashboardStats>);
     }
 
