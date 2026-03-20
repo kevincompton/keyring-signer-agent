@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { StructuredTool } from '@langchain/core/tools';
-import { createPublicClient, createWalletClient, http } from 'viem';
+import { createPublicClient, createWalletClient, http, parseEther } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import { PrivateKey } from '@hashgraph/sdk';
 
@@ -20,8 +20,8 @@ const SCHEDULE_REVIEW_ABI = [
     },
 ] as const;
 
-/** 1 HBAR in Hedera EVM units (8 decimals). Contract FEE_HBAR_WEI = 100_000_000 */
-const ONE_HBAR = 100_000_000n;
+/** 1 HBAR in Hedera EVM: msg.value uses 18 decimals (weibars), not 8. 1 HBAR = 10^18 weibars. */
+const ONE_HBAR = parseEther('1');
 
 /** Parse Hedera entity ID (0.0.xxxxx) to entity number (BigInt). */
 function parseEntityNum(entityId: string): bigint {

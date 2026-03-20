@@ -8,7 +8,7 @@
  */
 import '../load-env.js';
 import { parseEvmPrivateKey } from './schedule-passive-agents.js';
-import { createPublicClient, http } from 'viem';
+import { createPublicClient, http, parseEther } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 
 const SCHEDULE_REVIEW_ABI = [
@@ -26,7 +26,7 @@ const SCHEDULE_REVIEW_ABI = [
     },
 ] as const;
 
-const ONE_HBAR = 100_000_000n;
+const ONE_HBAR = parseEther('1');
 
 function parseEntityNum(entityId: string): bigint {
     const match = entityId.match(/^(\d+)\.(\d+)\.(\d+)$/);
