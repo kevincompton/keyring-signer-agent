@@ -1,24 +1,27 @@
 import { z } from 'zod';
 import { StructuredTool } from '@langchain/core/tools';
-import { createPublicClient, createWalletClient, http, parseEther } from 'viem';
+import { createPublicClient, createWalletClient, http } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import { PrivateKey } from '@hashgraph/sdk';
 
-/** ABI for scheduleReviewTrigger(uint256 scheduleId, uint256 durationSeconds, uint256 topicId1, uint256 topicId2) */
+/** ABI for scheduleReviewTrigger(string scheduleId, uint256 durationSeconds, string topicId1, string topicId2) - matches ScheduleReviewTrigger.sol */
 const SCHEDULE_REVIEW_ABI = [
     {
         name: 'scheduleReviewTrigger',
         type: 'function',
         stateMutability: 'payable',
         inputs: [
-            { name: 'scheduleId', type: 'uint256' },
+            { name: 'scheduleId', type: 'string' },
             { name: 'durationSeconds', type: 'uint256' },
-            { name: 'topicId1', type: 'uint256' },
-            { name: 'topicId2', type: 'uint256' },
+            { name: 'topicId1', type: 'string' },
+            { name: 'topicId2', type: 'string' },
         ],
         outputs: [],
     },
 ] as const;
+
+/** 1 HBAR in Hedera EVM units (8 decimals). Contract FEE_HBAR_WEI = 100_000_000 */
+const ONE_HBAR = 100_000_000n;
 
 /** Parse Hedera entity ID (0.0.xxxxx) to entity number (BigInt). */
 function parseEntityNum(entityId: string): bigint {
@@ -113,9 +116,7 @@ export class SchedulePassiveAgentsTool extends StructuredTool {
             }, null, 2);
         }
 
-        const topicId1 = parseEntityNum(topics[0]);
-        const topicId2 = topics.length >= 2 ? parseEntityNum(topics[1]) : topicId1;
-        const scheduleIdNum = parseEntityNum(scheduleId);
+        const topicId2 = topics.length >= 2 ? topics[1] : topics[0];
         const contractAddress = this.getContractAddress();
 
         const isMainnet = (process.env.HEDERA_NETWORK || 'testnet') === 'mainnet';
@@ -135,8 +136,8 @@ export class SchedulePassiveAgentsTool extends StructuredTool {
                 address: contractAddress,
                 abi: SCHEDULE_REVIEW_ABI,
                 functionName: 'scheduleReviewTrigger',
-                args: [scheduleIdNum, BigInt(durationSeconds), topicId1, topicId2],
-                value: parseEther('1'),
+                args: [scheduleId, BigInt(durationSeconds), topics[0], topicId2],
+                value: ONE_HBAR,
                 account,
             });
 

@@ -8,7 +8,7 @@
  */
 import '../load-env.js';
 import { parseEvmPrivateKey } from './schedule-passive-agents.js';
-import { createPublicClient, http, parseEther } from 'viem';
+import { createPublicClient, http } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 
 const SCHEDULE_REVIEW_ABI = [
@@ -17,14 +17,16 @@ const SCHEDULE_REVIEW_ABI = [
         type: 'function',
         stateMutability: 'payable',
         inputs: [
-            { name: 'scheduleId', type: 'uint256' },
+            { name: 'scheduleId', type: 'string' },
             { name: 'durationSeconds', type: 'uint256' },
-            { name: 'topicId1', type: 'uint256' },
-            { name: 'topicId2', type: 'uint256' },
+            { name: 'topicId1', type: 'string' },
+            { name: 'topicId2', type: 'string' },
         ],
         outputs: [],
     },
 ] as const;
+
+const ONE_HBAR = 100_000_000n;
 
 function parseEntityNum(entityId: string): bigint {
     const match = entityId.match(/^(\d+)\.(\d+)\.(\d+)$/);
@@ -76,8 +78,7 @@ async function main(): Promise<void> {
 
     const account = privateKeyToAccount(parsedKey);
     const contractAddress = contractId.startsWith('0x') ? (contractId as `0x${string}`) : entityIdToEvmAddress(contractId);
-    const topicId1 = parseEntityNum(topics[0]);
-    const topicId2 = topics.length >= 2 ? parseEntityNum(topics[1]) : topicId1;
+    const topicId2 = topics.length >= 2 ? topics[1] : topics[0];
 
     console.log('Testing schedule_passive_agents simulation');
     console.log('  Network:', network);
@@ -88,9 +89,9 @@ async function main(): Promise<void> {
     const transport = http(rpcUrl);
     const publicClient = createPublicClient({ chain, transport });
 
-    // Use a dummy schedule ID for simulation (0.0.1 = 1)
-    const dummyScheduleId = BigInt(1);
-    const dummyDuration = BigInt(60);
+    // Use dummy args for simulation - contract will revert (schedule fails) but we verify account exists
+    const dummyScheduleId = '0.0.1';
+    const dummyDuration = 60n;
 
     try {
         // Simulate via eth_call - will fail with "Sender account not found" if account doesn't exist
@@ -98,8 +99,8 @@ async function main(): Promise<void> {
             address: contractAddress,
             abi: SCHEDULE_REVIEW_ABI,
             functionName: 'scheduleReviewTrigger',
-            args: [dummyScheduleId, dummyDuration, topicId1, topicId2],
-            value: parseEther('1'),
+            args: [dummyScheduleId, dummyDuration, topics[0], topicId2],
+            value: ONE_HBAR,
             account,
         });
         console.log('OK: Simulation passed. Account exists and can call the contract.');
