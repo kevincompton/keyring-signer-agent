@@ -147,7 +147,7 @@ SECURITY PRINCIPLES:
 VALIDATION RULES FOR DEPOSITMINTER CONTRACT:
 
 CRITICAL RISK - MUST REJECT:
-1. SCHEDULE EXPIRY: Schedules with less than 48 hours until expiry (check schedule.secondsUntilExpiry from get_schedule_info — must be >= 172800). This ensures signers have enough time. NOTE: This rule does NOT apply to schedules from the operator inbound topic (those are trusted and signed directly).
+1. SCHEDULE EXPIRY: Schedules with less than 48 hours from creation to expiry (check schedule.totalWindowSeconds from get_schedule_info — must be >= 172800). This is the total window from when the schedule was created until it expires, NOT the time remaining when the agent receives it. NOTE: This rule does NOT apply to schedules from the operator inbound topic (those are trusted and signed directly).
 2. updateRatios/adminUpdateRatios with invalid parameters:
    - ANY ratio value < 1 or > 100 (violates MIN_RATIO/MAX_RATIO constraints)
    - Extremely imbalanced ratios (e.g., hbarRatio > 95 or any single asset > 95%)
@@ -196,8 +196,8 @@ WORKFLOW:
 - Use your scratchpad to remember information across steps (operator IDs, pending transactions, contract details)
 - Process transactions systematically and thoroughly
 - For EACH transaction (from fetch_pending_transactions — NOT from operator topic):
-  1. Get full details via get_schedule_info (includes expirationTime, secondsUntilExpiry, secondsUntilOneHourBeforeExpiry)
-  2. MUST REJECT if secondsUntilExpiry < 172800 (48 hours) — signers need time
+  1. Get full details via get_schedule_info (includes expirationTime, totalWindowSeconds, secondsUntilExpiry, secondsUntilOneHourBeforeExpiry)
+  2. MUST REJECT if totalWindowSeconds < 172800 (48 hours from creation to expiry) — signers need adequate time window
   3. Analyze against the validation rules above
   4. Determine risk level (low/medium/high/critical)
   5. Post validation message to validator review topic
@@ -553,11 +553,11 @@ Return ONLY a JSON array of schedule IDs.` }],
 
 STEP 1: Get full transaction details
 - Use get_schedule_info tool to get details for scheduleId="${scheduleId}"
-- This returns decoded function name, parameters, expirationTime, secondsUntilExpiry, and secondsUntilOneHourBeforeExpiry
+- This returns decoded function name, parameters, expirationTime, totalWindowSeconds (creation to expiry), secondsUntilExpiry, and secondsUntilOneHourBeforeExpiry
 
 STEP 2: Check 48-hour expiry rule (MUST REJECT if violated)
-- If schedule.secondsUntilExpiry < 172800 (48 hours): Post rejection to ${this.env.PROJECT_REJECTION_TOPIC} with reason "Schedule expires in less than 48 hours — signers need adequate time". DO NOT sign.
-- If no expirationTime or secondsUntilExpiry: treat as invalid, reject.
+- If schedule.totalWindowSeconds < 172800 (48 hours from creation to expiry): Post rejection to ${this.env.PROJECT_REJECTION_TOPIC} with reason "Schedule creation-to-expiry window is less than 48 hours — signers need adequate time". DO NOT sign.
+- If no expirationTime or totalWindowSeconds: treat as invalid, reject.
 
 STEP 3: Analyze the transaction
 - Check the function name and parameters against the validation rules in your system prompt

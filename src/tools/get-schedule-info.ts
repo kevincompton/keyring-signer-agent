@@ -58,6 +58,12 @@ export class GetScheduleInfoTool extends StructuredTool {
             // Extract key information
             const expirationTime = scheduleData.expiration_time ?? scheduleData.expirationTime ?? null;
             const expirationMs = this.parseExpirationToMs(expirationTime);
+            const creationMs = this.parseHederaTimestampToMs(scheduleData.consensus_timestamp);
+            // Total window from creation to expiry (what the 48h rule checks)
+            const totalWindowSeconds = expirationMs != null && creationMs != null
+                ? Math.floor((expirationMs - creationMs) / 1000)
+                : null;
+            // Time from now until expiry (for schedule_passive_agents duration)
             const secondsUntilExpiry = expirationMs != null
                 ? Math.floor((expirationMs - Date.now()) / 1000)
                 : (scheduleData.seconds_until_expiry ?? scheduleData.secondsUntilExpiry ?? null);
@@ -74,6 +80,8 @@ export class GetScheduleInfoTool extends StructuredTool {
                 transactionType: scheduleData.transaction_body ? this.detectTransactionType(scheduleData.transaction_body) : 'Unknown',
                 contractCall: contractCallDetails,
                 expirationTime: expirationTime ?? (expirationMs != null ? new Date(expirationMs).toISOString() : null),
+                creationTime: creationMs != null ? new Date(creationMs).toISOString() : null,
+                ...(totalWindowSeconds != null && { totalWindowSeconds }),
                 ...(secondsUntilExpiry != null && {
                     secondsUntilExpiry,
                     secondsUntilOneHourBeforeExpiry: Math.max(0, secondsUntilExpiry - 3600),
@@ -101,6 +109,13 @@ export class GetScheduleInfoTool extends StructuredTool {
                 scheduleId: scheduleId
             }, null, 2);
         }
+    }
+
+    /** Parse Hedera consensus_timestamp (e.g. "1774030047.922748000" seconds.nanoseconds) to ms. */
+    private parseHederaTimestampToMs(ts: unknown): number | null {
+        if (ts == null) return null;
+        const s = typeof ts === 'string' ? parseFloat(ts) : typeof ts === 'number' ? ts : NaN;
+        return Number.isNaN(s) ? null : Math.floor(s * 1000);
     }
 
     /** Parse expiration_time from mirror node - handles Unix seconds (number or string), ISO string. Returns ms or null. */

@@ -7,6 +7,7 @@ interface PendingSchedule {
     creator_account_id: string;
     payer_account_id: string;
     transaction_body: string;
+    consensus_timestamp?: string;
     signatures?: Array<{ public_key_prefix: string }>;
     executed_timestamp?: string;
     deleted?: boolean;
@@ -126,11 +127,15 @@ export class FetchPendingTransactionsTool extends StructuredTool {
                         console.log(`[FETCH_PENDING_TX] Skipping expired schedule: ${schedule.schedule_id}`);
                         continue;
                     }
-                    // Enforce 48-hour minimum from creation: schedule must have at least 48h until expiry
-                    const msUntilExpiry = exp.getTime() - now.getTime();
+                    // Enforce 48-hour minimum from creation to expiry (total window), not from now
+                    const creationMs = schedule.consensus_timestamp != null
+                        ? Math.floor(parseFloat(schedule.consensus_timestamp) * 1000)
+                        : null;
+                    const expMs = exp.getTime();
+                    const totalWindowMs = creationMs != null ? expMs - creationMs : null;
                     const FORTY_EIGHT_HOURS_MS = 48 * 60 * 60 * 1000;
-                    if (msUntilExpiry < FORTY_EIGHT_HOURS_MS) {
-                        console.log(`[FETCH_PENDING_TX] Skipping schedule ${schedule.schedule_id}: expires in < 48 hours (${Math.round(msUntilExpiry / 3600000)}h remaining)`);
+                    if (totalWindowMs != null && totalWindowMs < FORTY_EIGHT_HOURS_MS) {
+                        console.log(`[FETCH_PENDING_TX] Skipping schedule ${schedule.schedule_id}: creation-to-expiry window < 48 hours (${Math.round(totalWindowMs / 3600000)}h)`);
                         continue;
                     }
                 }
