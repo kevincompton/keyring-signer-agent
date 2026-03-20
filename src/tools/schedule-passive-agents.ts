@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { StructuredTool } from '@langchain/core/tools';
 import { createPublicClient, createWalletClient, http, parseEther } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
+import { PrivateKey } from '@hashgraph/sdk';
 
 /** ABI for scheduleReviewTrigger(uint256 scheduleId, uint256 durationSeconds, uint256 topicId1, uint256 topicId2) */
 const SCHEDULE_REVIEW_ABI = [
@@ -46,6 +47,27 @@ const HEDERA_MAINNET_CHAIN = {
     rpcUrls: { default: { http: ['https://mainnet.hashio.io/api'] } },
 } as const;
 
+/** Parse ECDSA (secp256k1) private key from raw hex or DER. Returns 0x-prefixed hex for viem. */
+export function parseEvmPrivateKey(key: string): `0x${string}` {
+    const trimmed = key.trim().replace(/^0x/, '');
+    if (/^[0-9a-fA-F]{64}$/.test(trimmed)) {
+        return (`0x${trimmed}`) as `0x${string}`;
+    }
+    if (PrivateKey.isDerKey(trimmed)) {
+        const algo = PrivateKey.getAlgorithm(trimmed);
+        if (algo !== 'ecdsa') {
+            throw new Error('EVM requires ECDSA (secp256k1) key. DER key is ED25519.');
+        }
+        const pk = PrivateKey.fromString(key.trim());
+        const raw = pk.toStringRaw();
+        if (!raw || !/^[0-9a-fA-F]{64}$/.test(raw)) {
+            throw new Error('Failed to extract raw ECDSA key from DER');
+        }
+        return (`0x${raw}`) as `0x${string}`;
+    }
+    throw new Error('EVM private key must be 32-byte hex (secp256k1) or ECDSA DER. Got invalid format.');
+}
+
 export class SchedulePassiveAgentsTool extends StructuredTool {
     name = 'schedule_passive_agents';
     description = 'Schedule passive agents on the threshold list by calling the schedule review contract. Uses PASSIVE_AGENT_INBOUND_TOPICS (comma-separated topic IDs) and SCHEDULE_REVIEW_CONTRACT_ID from env. Requires scheduleId and durationSeconds. Sends 1 HBAR per call (value).';
@@ -54,14 +76,13 @@ export class SchedulePassiveAgentsTool extends StructuredTool {
         durationSeconds: z.number().int().positive().describe('Duration in seconds for the review trigger'),
     });
 
+    /** EVM signer for scheduleReviewTrigger. Uses secp256k1 (ECDSA) key from CONTRACT_OPERATOR_KEY or SCHEDULE_REVIEW_EVM_PRIVATE_KEY. Supports raw 64-char hex or DER format. */
     private getEvmPrivateKey(): `0x${string}` {
-        const key = process.env.SCHEDULE_REVIEW_EVM_PRIVATE_KEY ?? process.env.HEDERA_PRIVATE_KEY;
-        if (!key) throw new Error('Missing SCHEDULE_REVIEW_EVM_PRIVATE_KEY or HEDERA_PRIVATE_KEY');
-        const hex = key.startsWith('0x') ? key : `0x${key}`;
-        if (!/^0x[0-9a-fA-F]{64}$/.test(hex)) {
-            throw new Error('EVM private key must be 32-byte hex (0x-prefixed). Use SCHEDULE_REVIEW_EVM_PRIVATE_KEY for secp256k1 key.');
-        }
-        return hex as `0x${string}`;
+        const key = process.env.SCHEDULE_REVIEW_EVM_PRIVATE_KEY
+            ?? process.env.CONTRACT_OPERATOR_KEY
+            ?? process.env.HEDERA_PRIVATE_KEY;
+        if (!key) throw new Error('Missing SCHEDULE_REVIEW_EVM_PRIVATE_KEY, CONTRACT_OPERATOR_KEY, or HEDERA_PRIVATE_KEY');
+        return parseEvmPrivateKey(key);
     }
 
     private getContractAddress(): `0x${string}` {
