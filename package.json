@@ -21,7 +21,8 @@
     "project:operator-inbound": "node --loader ts-node/esm src/utils/createOperatorInboundTopic.ts",
     "threshold:create": "node --loader ts-node/esm src/utils/createThreshold.ts",
     "test:transactions": "node --loader ts-node/esm src/utils/createTestTransactions.ts",
-    "test:schedule-passive-key": "node --loader ts-node/esm src/tools/test-schedule-passive-key.ts"
+    "test:schedule-passive-key": "node --loader ts-node/esm src/tools/test-schedule-passive-key.ts",
+    "test:schedule-passive-contract": "node --loader ts-node/esm src/tools/test-schedule-passive-contract.ts"
   },
   "author": "Kevin Compton",
   "license": "ISC",

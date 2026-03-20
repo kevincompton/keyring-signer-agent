@@ -76,12 +76,15 @@ export class SchedulePassiveAgentsTool extends StructuredTool {
         durationSeconds: z.number().int().positive().describe('Duration in seconds for the review trigger'),
     });
 
-    /** EVM signer for scheduleReviewTrigger. Uses secp256k1 (ECDSA) key. Prefers CONTRACT_OPERATOR_KEY (schedule creator 0.0.9651200). Supports raw hex or DER. */
+    /** EVM signer for scheduleReviewTrigger. MUST use CONTRACT_OPERATOR_KEY (schedule creator 0.0.9651200). HEDERA_PRIVATE_KEY is the agent key and must NOT be used. */
     private getEvmPrivateKey(): `0x${string}` {
-        const key = process.env.CONTRACT_OPERATOR_KEY
-            ?? process.env.SCHEDULE_REVIEW_EVM_PRIVATE_KEY
-            ?? process.env.HEDERA_PRIVATE_KEY;
-        if (!key) throw new Error('Missing CONTRACT_OPERATOR_KEY (or SCHEDULE_REVIEW_EVM_PRIVATE_KEY / HEDERA_PRIVATE_KEY)');
+        const key = process.env.CONTRACT_OPERATOR_KEY ?? process.env.SCHEDULE_REVIEW_EVM_PRIVATE_KEY;
+        if (!key) {
+            throw new Error(
+                'schedule_passive_agents requires CONTRACT_OPERATOR_KEY (schedule creator 0.0.9651200). ' +
+                'HEDERA_PRIVATE_KEY is the agent key and cannot be used. Add CONTRACT_OPERATOR_KEY to your .env and deployment config.'
+            );
+        }
         return parseEvmPrivateKey(key);
     }
 
