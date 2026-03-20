@@ -76,12 +76,12 @@ export class SchedulePassiveAgentsTool extends StructuredTool {
         durationSeconds: z.number().int().positive().describe('Duration in seconds for the review trigger'),
     });
 
-    /** EVM signer for scheduleReviewTrigger. Uses secp256k1 (ECDSA) key from CONTRACT_OPERATOR_KEY or SCHEDULE_REVIEW_EVM_PRIVATE_KEY. Supports raw 64-char hex or DER format. */
+    /** EVM signer for scheduleReviewTrigger. Uses secp256k1 (ECDSA) key. Prefers CONTRACT_OPERATOR_KEY (schedule creator 0.0.9651200). Supports raw hex or DER. */
     private getEvmPrivateKey(): `0x${string}` {
-        const key = process.env.SCHEDULE_REVIEW_EVM_PRIVATE_KEY
-            ?? process.env.CONTRACT_OPERATOR_KEY
+        const key = process.env.CONTRACT_OPERATOR_KEY
+            ?? process.env.SCHEDULE_REVIEW_EVM_PRIVATE_KEY
             ?? process.env.HEDERA_PRIVATE_KEY;
-        if (!key) throw new Error('Missing SCHEDULE_REVIEW_EVM_PRIVATE_KEY, CONTRACT_OPERATOR_KEY, or HEDERA_PRIVATE_KEY');
+        if (!key) throw new Error('Missing CONTRACT_OPERATOR_KEY (or SCHEDULE_REVIEW_EVM_PRIVATE_KEY / HEDERA_PRIVATE_KEY)');
         return parseEvmPrivateKey(key);
     }
 
