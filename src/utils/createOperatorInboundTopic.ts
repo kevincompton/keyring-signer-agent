@@ -16,8 +16,8 @@ import {
 const NETWORK = process.env.HEDERA_NETWORK || 'testnet';
 const isMainnet = NETWORK === 'mainnet';
 
-/** Fee per message submission in HBAR (HIP-991). Default 0.01 HBAR. */
-const DEFAULT_TOPIC_FEE_HBAR = 0.01;
+/** Fee per message submission in HBAR (HIP-991). Default 1 HBAR. KeyRing operator is fee exempt. */
+const DEFAULT_TOPIC_FEE_HBAR = 1;
 
 function parseKeyringOperatorPublicKey(keyString: string): PublicKey {
     const trimmed = keyString.trim();

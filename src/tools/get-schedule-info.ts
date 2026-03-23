@@ -404,7 +404,7 @@ export class GetScheduleInfoTool extends StructuredTool {
                 }
             }
 
-            // Fallback: known selectors not in compiled ABIs (e.g. setAdmin from proxy/admin contracts)
+            // Fallback: known selectors not in compiled ABIs
             const selector = cleanHex.slice(0, 8);
             if (selector === '704b6c02') {
                 // setAdmin(address) - both DepositMinterV2 and VaultLPManager have this
@@ -419,6 +419,24 @@ export class GetScheduleInfoTool extends StructuredTool {
                             params[input.name || `param${index}`] = this.serializeForJson(value);
                         });
                         return { functionName: 'setAdmin', parameters: params, contractHint: 'DepositMinterV2/VaultLPManager' };
+                    }
+                } catch {
+                    // fall through to Unknown
+                }
+            }
+            if (selector === 'fd1e5926') {
+                // withdrawFromLpManager(address token, uint256 amount) - DepositMinterV2: pull WHBAR/tokens from LP back to vault
+                try {
+                    const abi = ['function withdrawFromLpManager(address token, uint256 amount) returns (uint256)'];
+                    const iface = new ethers.Interface(abi);
+                    const decoded = iface.parseTransaction({ data });
+                    if (decoded) {
+                        const params: Record<string, unknown> = {};
+                        decoded.fragment.inputs.forEach((input, index) => {
+                            const value = decoded.args[index];
+                            params[input.name || `param${index}`] = this.serializeForJson(value);
+                        });
+                        return { functionName: 'withdrawFromLpManager', parameters: params, contractHint: 'DepositMinterV2' };
                     }
                 } catch {
                     // fall through to Unknown

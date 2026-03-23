@@ -49,6 +49,8 @@ export class KeyringSignerAgent {
     // Validator inbound subscription
     private isRunningCheck: boolean = false;
     private runCheckAgain: boolean = false;
+    private validatorSubRetryDelayMs = 5000;
+    private operatorSubRetryDelayMs = 5000;
 
     constructor() {
         this.env = process.env as NodeJS.ProcessEnv & EnvironmentConfig;
@@ -174,6 +176,7 @@ MEDIUM RISK - VALIDATE THOROUGHLY:
 LOW RISK - LIKELY SAFE TO SIGN:
 1. mintWithDeposits with correct deposit ratios matching current configuration
 2. Small ratio adjustments within expected governance parameters
+3. withdrawFromLpManager(token, amount) — pulls tokens (e.g. WHBAR) from LP manager back to proxy vault; the vault is the safe destination, this is normal when rebalancing or recovering liquidity
 
 VALIDATION RULES FOR VAULTLP MANAGER (VaultLPManager) - LP staking / SaucerSwap:
 
@@ -186,11 +189,12 @@ LOW RISK - LIKELY SAFE TO SIGN (all known VaultLPManager functions when threshol
 - LP operations: createLPPosition, closeLPPosition, decreaseLPPosition, collectLPFees
 - V1 liquidity: addLiquidityV1, addLiquidityV1ETH, removeLiquidityV1, removeLiquidityV1ETH
 - Admin/config: setVault, setAdmin, configureSaucerSwap, configureSaucerSwapV1, setCompositionToken, associateTokenAdmin, approveSaucerSwapSpending, approveSaucerSwapV1Spending, associateSaucerSwapTokens
-- Transfers: withdrawToVault, withdrawHbarToVault - moving tokens/HBAR between LP manager and proxy (vault) is normal admin operation
+- Transfers to vault (proxy is safe destination): withdrawToVault, withdrawHbarToVault (VaultLPManager) — moving tokens/HBAR from LP manager to proxy vault is normal
+- withdrawFromLpManager (DepositMinterV2) — pulls WHBAR or other tokens from LP manager back to proxy vault; normal operation when rebalancing or recovering liquidity
 
 setAdmin(address newAdmin): When memo indicates admin action (e.g. "Lynx: setAdmin 0.0.xxxxx on 0.0.yyyyy") and threshold is payer, treat as LOW RISK. REJECT only if newAdmin is zero address (0x0000000000000000000000000000000000000000).
 
-When contractHint is "VaultLPManager" or "DepositMinterV2/VaultLPManager", treat as LOW RISK unless parameters look suspicious (e.g. zero address for setVault or setAdmin). Note: tickLower and tickUpper (int24) can be negative — that is normal for concentrated liquidity, not a red flag.
+When contractHint is "VaultLPManager" or "DepositMinterV2" or "DepositMinterV2/VaultLPManager", treat as LOW RISK unless parameters look suspicious (e.g. zero address for setVault or setAdmin). The proxy vault is a safe destination — withdrawFromLpManager and withdrawToVault/withdrawHbarToVault move assets back to the vault and are normal operations. Note: tickLower and tickUpper (int24) can be negative — that is normal for concentrated liquidity, not a red flag.
 
 WORKFLOW:
 - Use your scratchpad to remember information across steps (operator IDs, pending transactions, contract details)
@@ -323,22 +327,34 @@ You are account ${this.env.HEDERA_ACCOUNT_ID} operating on ${this.env.HEDERA_NET
         if (!this.client) {
             throw new Error('Client not initialized');
         }
-        new TopicMessageQuery()
-            .setTopicId(topicId)
-            .subscribe(this.client, (msg, err) => {
-                if (err) {
-                    console.error('❌ Validator inbound subscription error:', err);
-                }
-            }, (message) => {
-                const messageAsString = new TextDecoder().decode(message.contents);
-                console.log(
-                    `\n📥 ${message.consensusTimestamp.toDate().toISOString()} Validator inbound message received: ${messageAsString}`
-                );
-                const scheduleId = this.parseScheduleIdFromValidatorMessage(messageAsString);
-                this.runCheck(scheduleId).catch((err) => {
-                    console.error('❌ Error running check from inbound trigger:', err);
+        const doSubscribe = () => {
+            if (!this.isRunning || !this.client) return;
+            new TopicMessageQuery()
+                .setTopicId(topicId)
+                .subscribe(this.client, (msg, err) => {
+                    if (err) {
+                        console.error('❌ Validator inbound subscription error:', err);
+                        if (this.isRunning && this.client) {
+                            const delay = this.validatorSubRetryDelayMs;
+                            console.log(`🔄 Will retry validator inbound subscription in ${delay / 1000}s...`);
+                            setTimeout(() => doSubscribe(), delay);
+                            this.validatorSubRetryDelayMs = Math.min(60000, this.validatorSubRetryDelayMs * 1.5);
+                        }
+                    } else {
+                        this.validatorSubRetryDelayMs = 5000;
+                    }
+                }, (message) => {
+                    const messageAsString = new TextDecoder().decode(message.contents);
+                    console.log(
+                        `\n📥 ${message.consensusTimestamp.toDate().toISOString()} Validator inbound message received: ${messageAsString}`
+                    );
+                    const scheduleId = this.parseScheduleIdFromValidatorMessage(messageAsString);
+                    this.runCheck(scheduleId).catch((err) => {
+                        console.error('❌ Error running check from inbound trigger:', err);
+                    });
                 });
-            });
+        };
+        doSubscribe();
     }
 
     /** Subscribe to operator inbound topic. KeyRing operator sends schedule IDs to sign (trusted, no validation). */
@@ -346,21 +362,33 @@ You are account ${this.env.HEDERA_ACCOUNT_ID} operating on ${this.env.HEDERA_NET
         if (!this.client || !this.signTransactionTool) {
             throw new Error('Client or signTransactionTool not initialized');
         }
-        new TopicMessageQuery()
-            .setTopicId(topicId)
-            .subscribe(this.client, (msg, err) => {
-                if (err) {
-                    console.error('❌ Operator inbound subscription error:', err);
-                }
-            }, (message) => {
-                const messageAsString = new TextDecoder().decode(message.contents);
-                console.log(
-                    `\n📥 ${message.consensusTimestamp.toDate().toISOString()} Operator inbound message received: ${messageAsString}`
-                );
-                this.handleOperatorInboundMessage(messageAsString).catch((err) => {
-                    console.error('❌ Error handling operator inbound message:', err);
+        const doSubscribe = () => {
+            if (!this.isRunning || !this.client) return;
+            new TopicMessageQuery()
+                .setTopicId(topicId)
+                .subscribe(this.client, (msg, err) => {
+                    if (err) {
+                        console.error('❌ Operator inbound subscription error:', err);
+                        if (this.isRunning && this.client) {
+                            const delay = this.operatorSubRetryDelayMs;
+                            console.log(`🔄 Will retry operator inbound subscription in ${delay / 1000}s...`);
+                            setTimeout(() => doSubscribe(), delay);
+                            this.operatorSubRetryDelayMs = Math.min(60000, this.operatorSubRetryDelayMs * 1.5);
+                        }
+                    } else {
+                        this.operatorSubRetryDelayMs = 5000;
+                    }
+                }, (message) => {
+                    const messageAsString = new TextDecoder().decode(message.contents);
+                    console.log(
+                        `\n📥 ${message.consensusTimestamp.toDate().toISOString()} Operator inbound message received: ${messageAsString}`
+                    );
+                    this.handleOperatorInboundMessage(messageAsString).catch((err) => {
+                        console.error('❌ Error handling operator inbound message:', err);
+                    });
                 });
-            });
+        };
+        doSubscribe();
     }
 
     /** Parse schedule IDs from message, sign each, notify passive agents. */

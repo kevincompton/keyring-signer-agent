@@ -8,7 +8,12 @@ import {
     TopicInfoQuery,
     PrivateKey,
     AccountId,
+    CustomFixedFee,
+    Hbar,
 } from '@hashgraph/sdk';
+
+/** HIP-991 fee per message in HBAR. Default 1 HBAR. Lynx operator (submitter) is fee exempt. */
+const DEFAULT_VALIDATOR_INBOUND_FEE_HBAR = 1;
 
 const NETWORK = process.env.HEDERA_NETWORK || 'testnet';
 const isMainnet = NETWORK === 'mainnet';
@@ -31,12 +36,13 @@ function parseLynxOperatorKey(keyStr: string): PrivateKey {
 }
 
 /**
- * Create or get validator inbound topic. HCS-2 non-indexed.
- * Lynx operator posts here to trigger the agent to check for schedules.
+ * Create or get validator inbound topic. HCS-2 non-indexed, HIP-991 fee (default 1 HBAR).
+ * Lynx operator posts here to trigger the agent to check for schedules; Lynx is fee exempt.
  */
 async function getOrCreateValidatorInboundTopic(
     client: Client,
     network: string,
+    adminAccountId: AccountId,
     adminKey: PrivateKey,
     lynxOperatorKey: PrivateKey
 ): Promise<string> {
@@ -62,19 +68,30 @@ async function getOrCreateValidatorInboundTopic(
         }
     }
 
+    const feeHbar = parseFloat(process.env.VALIDATOR_INBOUND_TOPIC_FEE_HBAR || String(DEFAULT_VALIDATOR_INBOUND_FEE_HBAR));
+    const topicFee = new Hbar(feeHbar);
+
     // HCS-2 non-indexed: hcs-2:1:86400 (1 = non-indexed, 86400 = 24h TTL)
-    console.log(`📝 Creating Validator Inbound topic on ${network.toUpperCase()} (HCS-2 non-indexed, Lynx operator trigger)...`);
+    console.log(`📝 Creating Validator Inbound topic on ${network.toUpperCase()} (HCS-2 non-indexed, HIP-991 fee ${feeHbar} HBAR, Lynx operator trigger)...`);
+
+    const customFee = new CustomFixedFee({
+        feeCollectorAccountId: adminAccountId,
+    }).setHbarAmount(topicFee);
 
     const createTopicTx = new TopicCreateTransaction()
         .setTopicMemo('hcs-2:1:86400') // HCS-2 non-indexed, 24 hour TTL
         .setSubmitKey(lynxOperatorKey.publicKey) // Lynx operator posts to trigger agent
-        .setAdminKey(adminKey.publicKey);
+        .setAdminKey(adminKey.publicKey)
+        .setFeeScheduleKey(adminKey.publicKey)
+        .addFeeExemptKey(lynxOperatorKey.publicKey) // Lynx operator submits free
+        .addCustomFee(customFee);
 
     const createResponse = await createTopicTx.execute(client);
     const createReceipt = await createResponse.getReceipt(client);
     const newTopicId = createReceipt.topicId!.toString();
 
     console.log(`✅ Created new ${network} validator inbound topic with ID:`, newTopicId);
+    console.log(`   HIP-991 fee: ${feeHbar} HBAR per message (Lynx operator is fee exempt)`);
     console.log(`\n📋 Add this to your .env file:\nPROJECT_VALIDATOR_INBOUND_TOPIC=${newTopicId}`);
     console.log(`\n💡 Lynx operator posts to this topic to trigger the agent to check for schedules.\n`);
     return newTopicId;
@@ -129,7 +146,7 @@ async function setupValidatorInboundTopic() {
             ? Client.forMainnet().setOperator(operatorId, operatorPrivateKey)
             : Client.forTestnet().setOperator(operatorId, operatorPrivateKey);
 
-        const topicId = await getOrCreateValidatorInboundTopic(client, NETWORK, operatorPrivateKey, lynxOperatorPrivateKey);
+        const topicId = await getOrCreateValidatorInboundTopic(client, NETWORK, operatorId, operatorPrivateKey, lynxOperatorPrivateKey);
 
         console.log('\n🎉 Validator inbound topic created successfully!');
         console.log('═══════════════════════════════════════');
